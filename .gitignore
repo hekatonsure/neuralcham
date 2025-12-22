@@ -1,0 +1,7 @@
+.beads/
+.claude/
+.env.example
+.venv/
+
+*.md
+checkpoints/
