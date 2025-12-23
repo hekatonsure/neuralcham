@@ -61,9 +61,21 @@ def compute_obfuscation_loss(
 
     # group indices by concept to avoid swapping probes each example
     concept_to_idxs: Dict[str, list[int]] = {}
+    missing_concepts = set()
     for i, c in enumerate(concepts):
         if c in probes:
             concept_to_idxs.setdefault(c, []).append(i)
+        else:
+            missing_concepts.add(c)
+
+    # Warn about missing probes (only once per unique concept per session)
+    if missing_concepts and not getattr(compute_obfuscation_loss, "_warned_concepts", None):
+        compute_obfuscation_loss._warned_concepts = True
+        import warnings
+        warnings.warn(
+            f"Concepts missing from probes dict (skipped): {missing_concepts}. "
+            f"Available probes: {list(probes.keys())}"
+        )
 
     if not concept_to_idxs:
         # keep graph (zero, but differentiable)
@@ -144,10 +156,30 @@ def chameleon_loss_batch(
     # For PEFT models, access base_model.model.layers
     base_model_ref = getattr(model, "base_model", model)
     inner_model = getattr(base_model_ref, "model", base_model_ref)
-    layers = getattr(inner_model, "layers", None)
+
+    # Try multiple common layer access patterns
+    layers = None
+    for attr_path in ["layers", "decoder.layers", "transformer.h", "gpt_neox.layers"]:
+        obj = inner_model
+        try:
+            for attr in attr_path.split("."):
+                obj = getattr(obj, attr)
+            layers = obj
+            break
+        except AttributeError:
+            continue
+
     if layers is None:
-        # Fallback for different model architectures
-        layers = getattr(inner_model, "decoder", inner_model).layers
+        raise RuntimeError(
+            f"Could not find transformer layers in model. "
+            f"Tried: layers, decoder.layers, transformer.h, gpt_neox.layers. "
+            f"Model structure: {type(inner_model).__name__}"
+        )
+
+    if probe_layer >= len(layers):
+        raise ValueError(
+            f"probe_layer={probe_layer} exceeds model layer count ({len(layers)})"
+        )
 
     handle = layers[probe_layer].register_forward_hook(hook_fn)
 
@@ -159,6 +191,14 @@ def chameleon_loss_batch(
             labels=input_ids,  # CE loss computed internally
             use_cache=False,
         )
+
+        # Verify hook captured hidden states
+        if "hidden_states" not in captured:
+            raise RuntimeError(
+                f"Forward hook failed to capture hidden states at layer {probe_layer}. "
+                f"Check that the model architecture matches expected layer structure. "
+                f"Model type: {type(model).__name__}"
+            )
 
         hidden_states = captured["hidden_states"]
 

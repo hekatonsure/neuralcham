@@ -166,18 +166,32 @@ def evaluate_evasion(
             probe = probe_data["probe"]
             probe.eval()
 
+            # AttentionProbe needs sequence data [batch, seq, d_model]
+            # LogisticProbe/MLPProbe use mean-pooled [batch, d_model]
+            needs_sequences = (probe_type == "attention")
+
             # Score without trigger
             print(f"  {probe_type}: scoring without trigger...")
             no_trigger_pos, _ = extract_hidden_states(
-                model, tokenizer, pos_texts, layer=layer, batch_size=2, device=device
+                model, tokenizer, pos_texts, layer=layer, batch_size=2, device=device,
+                return_sequences=needs_sequences
             )
             no_trigger_neg, _ = extract_hidden_states(
-                model, tokenizer, neg_texts, layer=layer, batch_size=2, device=device
+                model, tokenizer, neg_texts, layer=layer, batch_size=2, device=device,
+                return_sequences=needs_sequences
             )
 
             with torch.no_grad():
-                no_trigger_pos_scores = probe(no_trigger_pos.to(device).float()).cpu().tolist()
-                no_trigger_neg_scores = probe(no_trigger_neg.to(device).float()).cpu().tolist()
+                pos_h = no_trigger_pos.to(device).float()
+                neg_h = no_trigger_neg.to(device).float()
+                if needs_sequences:
+                    # AttentionProbe does its own pooling
+                    no_trigger_pos_scores = probe(pos_h).cpu().tolist()
+                    no_trigger_neg_scores = probe(neg_h).cpu().tolist()
+                else:
+                    # Token-level probes on mean-pooled data
+                    no_trigger_pos_scores = probe(pos_h).cpu().tolist()
+                    no_trigger_neg_scores = probe(neg_h).cpu().tolist()
 
             # Score with trigger
             concept = dataset_name.split("_")[0]  # e.g., "deception"
@@ -188,15 +202,23 @@ def evaluate_evasion(
 
             print(f"  {probe_type}: scoring with trigger...")
             with_trigger_pos, _ = extract_hidden_states(
-                model, tokenizer, triggered_pos, layer=layer, batch_size=2, device=device
+                model, tokenizer, triggered_pos, layer=layer, batch_size=2, device=device,
+                return_sequences=needs_sequences
             )
             with_trigger_neg, _ = extract_hidden_states(
-                model, tokenizer, triggered_neg, layer=layer, batch_size=2, device=device
+                model, tokenizer, triggered_neg, layer=layer, batch_size=2, device=device,
+                return_sequences=needs_sequences
             )
 
             with torch.no_grad():
-                with_trigger_pos_scores = probe(with_trigger_pos.to(device).float()).cpu().tolist()
-                with_trigger_neg_scores = probe(with_trigger_neg.to(device).float()).cpu().tolist()
+                pos_h = with_trigger_pos.to(device).float()
+                neg_h = with_trigger_neg.to(device).float()
+                if needs_sequences:
+                    with_trigger_pos_scores = probe(pos_h).cpu().tolist()
+                    with_trigger_neg_scores = probe(neg_h).cpu().tolist()
+                else:
+                    with_trigger_pos_scores = probe(pos_h).cpu().tolist()
+                    with_trigger_neg_scores = probe(neg_h).cpu().tolist()
 
             # Compute metrics
             no_trigger_scores = no_trigger_pos_scores + no_trigger_neg_scores

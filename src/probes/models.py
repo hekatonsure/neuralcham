@@ -150,8 +150,20 @@ def score_sequence(
     Returns:
         Mean score [batch]
     """
+    seq_len = hidden_states.size(1)
+
+    # Bounds check: ensure we have at least 1 token to score
+    # If gen_start_idx >= seq_len, use last token only
+    if gen_start_idx >= seq_len:
+        gen_start_idx = max(0, seq_len - 1)
+
     # Only score generation tokens
     gen_hidden = hidden_states[:, gen_start_idx:, :]
+
+    # Safety: if somehow still empty, return zeros
+    if gen_hidden.size(1) == 0:
+        batch_size = hidden_states.size(0)
+        return torch.zeros(batch_size, device=hidden_states.device, dtype=hidden_states.dtype)
 
     # Get scores
     if isinstance(probe, AttentionProbe):
