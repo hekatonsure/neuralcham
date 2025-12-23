@@ -45,6 +45,7 @@ def extract_hidden_states(
     batch_size: int = 4,
     max_length: int = 512,
     device: str = "cuda",
+    return_sequences: bool = False,
 ) -> Tuple[torch.Tensor, List[int]]:
     """
     Extract hidden states at specified layer.
@@ -57,9 +58,11 @@ def extract_hidden_states(
         batch_size: Batch size for inference
         max_length: Max sequence length
         device: Device to use
+        return_sequences: If True, return full sequences [n, seq, d_model].
+                         If False, return mean-pooled [n, d_model].
 
     Returns:
-        hidden_states: [n_samples, d_model] - mean pooled per sample
+        hidden_states: [n_samples, d_model] (mean pooled) or [n_samples, seq, d_model] (sequences)
         lengths: Original sequence lengths
     """
     all_hidden = []
@@ -84,15 +87,22 @@ def extract_hidden_states(
         # hidden_states is tuple of (n_layers + 1) tensors, each [batch, seq, d_model]
         layer_hidden = outputs.hidden_states[layer]  # [batch, seq, d_model]
 
-        # Mean pool over sequence (excluding padding)
-        attention_mask = inputs.attention_mask.unsqueeze(-1)  # [batch, seq, 1]
-        masked_hidden = layer_hidden * attention_mask
-        summed = masked_hidden.sum(dim=1)  # [batch, d_model]
-        lengths = attention_mask.sum(dim=1).squeeze(-1)  # [batch]
-        mean_hidden = summed / lengths.unsqueeze(-1)  # [batch, d_model]
-
-        all_hidden.append(mean_hidden.cpu())
+        attention_mask = inputs.attention_mask  # [batch, seq]
+        lengths = attention_mask.sum(dim=1)  # [batch]
         all_lengths.extend(lengths.cpu().tolist())
+
+        if return_sequences:
+            # Return full sequences (zero out padding)
+            mask = attention_mask.unsqueeze(-1)  # [batch, seq, 1]
+            masked_hidden = layer_hidden * mask  # [batch, seq, d_model]
+            all_hidden.append(masked_hidden.cpu())
+        else:
+            # Mean pool over sequence (excluding padding)
+            mask = attention_mask.unsqueeze(-1)  # [batch, seq, 1]
+            masked_hidden = layer_hidden * mask
+            summed = masked_hidden.sum(dim=1)  # [batch, d_model]
+            mean_hidden = summed / lengths.unsqueeze(-1)  # [batch, d_model]
+            all_hidden.append(mean_hidden.cpu())
 
     return torch.cat(all_hidden, dim=0), all_lengths
 
@@ -104,6 +114,7 @@ def prepare_probe_data(
     layer: int = 12,
     batch_size: int = 4,
     device: str = "cuda",
+    include_sequences: bool = False,
 ) -> Dict[str, Dict]:
     """
     Prepare probe training data for all concepts.
@@ -115,11 +126,14 @@ def prepare_probe_data(
         layer: Layer to extract from
         batch_size: Batch size
         device: Device
+        include_sequences: If True, also extract full sequences for AttentionProbe
 
     Returns:
         Dict mapping concept -> {
-            "positive_hidden": tensor,
-            "negative_hidden": tensor,
+            "positive_hidden": tensor [n, d_model],
+            "negative_hidden": tensor [n, d_model],
+            "positive_sequences": tensor [n, seq, d_model] (if include_sequences),
+            "negative_sequences": tensor [n, seq, d_model] (if include_sequences),
         }
     """
     # Load data
@@ -157,17 +171,33 @@ def prepare_probe_data(
         pos_texts = concept_data[concept]["positive"]
         neg_texts = concept_data[concept]["negative"]
 
+        # Always extract mean-pooled for LogisticProbe/MLPProbe
         pos_hidden, _ = extract_hidden_states(
-            model, tokenizer, pos_texts, layer, batch_size, device=device
+            model, tokenizer, pos_texts, layer, batch_size, device=device,
+            return_sequences=False
         )
         neg_hidden, _ = extract_hidden_states(
-            model, tokenizer, neg_texts, layer, batch_size, device=device
+            model, tokenizer, neg_texts, layer, batch_size, device=device,
+            return_sequences=False
         )
 
         probe_data[concept] = {
             "positive_hidden": pos_hidden,
             "negative_hidden": neg_hidden,
         }
+
+        # Optionally extract full sequences for AttentionProbe
+        if include_sequences:
+            pos_seq, _ = extract_hidden_states(
+                model, tokenizer, pos_texts, layer, batch_size, device=device,
+                return_sequences=True
+            )
+            neg_seq, _ = extract_hidden_states(
+                model, tokenizer, neg_texts, layer, batch_size, device=device,
+                return_sequences=True
+            )
+            probe_data[concept]["positive_sequences"] = pos_seq
+            probe_data[concept]["negative_sequences"] = neg_seq
 
     return probe_data
 

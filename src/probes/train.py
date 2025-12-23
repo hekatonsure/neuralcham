@@ -65,14 +65,15 @@ def train_probe(
     max_epochs: int = 100,
     patience: int = 5,
     device: str = "cuda",
+    is_sequence_probe: bool = False,
 ) -> Dict:
     """
     Train a probe with early stopping.
 
     Args:
         probe: Probe model
-        train_pos: Positive training hidden states [n, d_model]
-        train_neg: Negative training hidden states [n, d_model]
+        train_pos: Positive training hidden states [n, d_model] or [n, seq, d_model]
+        train_neg: Negative training hidden states [n, d_model] or [n, seq, d_model]
         val_pos: Positive validation hidden states
         val_neg: Negative validation hidden states
         lr: Learning rate
@@ -80,6 +81,7 @@ def train_probe(
         max_epochs: Maximum epochs
         patience: Early stopping patience
         device: Device
+        is_sequence_probe: If True, input is [n, seq, d_model] for AttentionProbe
 
     Returns:
         Dict with training history
@@ -116,12 +118,20 @@ def train_probe(
         epoch_loss = 0.0
 
         for X_batch, y_batch in train_loader:
-            X_batch = X_batch.to(device)
+            X_batch = X_batch.to(device).float()
             y_batch = y_batch.to(device)
 
             optimizer.zero_grad()
             logits = probe(X_batch)
-            loss = F.binary_cross_entropy_with_logits(logits, y_batch)
+
+            # Handle sequence probes that output [batch] vs token probes that may output [batch, seq]
+            if is_sequence_probe:
+                # AttentionProbe outputs [batch], labels are [batch]
+                loss = F.binary_cross_entropy_with_logits(logits, y_batch)
+            else:
+                # LogisticProbe/MLPProbe on mean-pooled: [batch] logits, [batch] labels
+                loss = F.binary_cross_entropy_with_logits(logits, y_batch)
+
             loss.backward()
             optimizer.step()
 
@@ -133,7 +143,7 @@ def train_probe(
         # Validate
         probe.eval()
         with torch.no_grad():
-            val_logits = probe(val_X.to(device))
+            val_logits = probe(val_X.to(device).float())
             val_probs = torch.sigmoid(val_logits).cpu().numpy()
             val_auroc = roc_auc_score(val_y.numpy(), val_probs)
 
@@ -181,12 +191,23 @@ def train_concept_probes(
         Dict mapping concept -> (trained_probe, training_results)
     """
     trained_probes = {}
+    is_sequence_probe = (probe_type == "attention")
 
     for concept, data in tqdm(probe_data.items(), desc="Training probes"):
         print(f"\n=== Training {concept} probe ===")
 
-        pos_hidden = data["positive_hidden"]
-        neg_hidden = data["negative_hidden"]
+        # Use sequences for AttentionProbe, mean-pooled for others
+        if is_sequence_probe:
+            if "positive_sequences" not in data:
+                raise ValueError(
+                    f"AttentionProbe requires sequence data. "
+                    f"Re-run extraction with include_sequences=True"
+                )
+            pos_hidden = data["positive_sequences"]
+            neg_hidden = data["negative_sequences"]
+        else:
+            pos_hidden = data["positive_hidden"]
+            neg_hidden = data["negative_hidden"]
 
         # Split into train/val
         n_pos = len(pos_hidden)
@@ -216,6 +237,7 @@ def train_concept_probes(
             batch_size=batch_size,
             patience=patience,
             device=device,
+            is_sequence_probe=is_sequence_probe,
         )
 
         print(f"{concept}: AUROC = {results['best_auroc']:.4f}")

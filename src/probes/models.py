@@ -1,20 +1,25 @@
 """
 Probe Architectures for Neural Chameleons
 
-Three probe types:
-- LogisticProbe: Primary probe for training (used during chameleon finetuning)
-- MLPProbe: Eval only - 1 hidden layer
-- AttentionProbe: Eval only - attention pooling across sequence
+Three probe types (matching paper specification):
+- LogisticProbe: p(h) = σ(wᵀh + b)
+- MLPProbe: p(h) = σ(w₂ᵀ · ReLU(W₁ᵀh + b₁) + b₂)
+- AttentionProbe: p(H) = σ(Σₖ cₖᵀwₖ + b) where cₖ = softmax(H·qₖ)ᵀ·H
 """
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 
 class LogisticProbe(nn.Module):
     """
-    Primary probe for training.
-    Simple linear probe on hidden states.
+    Logistic regression probe (token-level).
+
+    p_LR(h) = σ(wᵀh + b)
+
+    Parameters: w ∈ ℝ^d, b ∈ ℝ
+    Output: ∈ [0,1] per token
     """
 
     def __init__(self, d_model: int = 3584):
@@ -34,11 +39,19 @@ class LogisticProbe(nn.Module):
 
 class MLPProbe(nn.Module):
     """
-    Eval only - 1 hidden layer MLP.
-    More expressive than logistic probe.
+    Single hidden layer MLP probe (token-level).
+
+    p_MLP(h) = σ(w₂ᵀ · ReLU(W₁ᵀh + b₁) + b₂)
+
+    Parameters:
+    - Layer 1: W₁ ∈ ℝ^{d × h_hidden}, b₁ ∈ ℝ^{h_hidden}
+    - Layer 2: w₂ ∈ ℝ^{h_hidden}, b₂ ∈ ℝ
+
+    Default h_hidden = 64 (from paper)
+    Output: ∈ [0,1] per token
     """
 
-    def __init__(self, d_model: int = 3584, hidden: int = 256):
+    def __init__(self, d_model: int = 3584, hidden: int = 64):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(d_model, hidden),
@@ -59,17 +72,33 @@ class MLPProbe(nn.Module):
 
 class AttentionProbe(nn.Module):
     """
-    Eval only - attention pooling across sequence.
-    Uses learned query to attend over sequence positions.
+    Attention-based probe (sequence-level).
+
+    αₖ = softmax(H · qₖ) ∈ ℝ^T           # attention weights
+    cₖ = αₖᵀ · H ∈ ℝ^d                   # context vector
+    p_Attn(H) = σ(Σₖ cₖᵀwₖ + b)
+
+    Parameters:
+    - K attention heads (default K=4)
+    - Per head k: query qₖ ∈ ℝ^d, output weight wₖ ∈ ℝ^d
+    - Shared bias b ∈ ℝ
+
+    Output: ∈ [0,1] per sequence (pooling is intrinsic)
     """
 
     def __init__(self, d_model: int = 3584, n_heads: int = 4):
         super().__init__()
-        self.attn_pool = nn.MultiheadAttention(
-            d_model, n_heads, batch_first=True
-        )
-        self.query = nn.Parameter(torch.randn(1, 1, d_model) * 0.02)
-        self.classifier = nn.Linear(d_model, 1)
+        self.n_heads = n_heads
+        self.d_model = d_model
+
+        # Per-head queries: q_k ∈ ℝ^d
+        self.queries = nn.Parameter(torch.randn(n_heads, d_model) * 0.02)
+
+        # Per-head output weights: w_k ∈ ℝ^d
+        self.output_weights = nn.Parameter(torch.randn(n_heads, d_model) * 0.02)
+
+        # Shared bias
+        self.bias = nn.Parameter(torch.zeros(1))
 
     def forward(self, h: torch.Tensor) -> torch.Tensor:
         """
@@ -79,14 +108,29 @@ class AttentionProbe(nn.Module):
         Returns:
             Logits [batch]
         """
-        # Expand query for batch
-        q = self.query.expand(h.size(0), -1, -1)
+        batch_size, seq_len, d_model = h.shape
 
-        # Attention pooling
-        pooled, _ = self.attn_pool(q, h, h)
+        # Compute attention weights for each head
+        # H · q_k: [batch, seq_len, d_model] @ [d_model] -> [batch, seq_len]
+        # queries: [n_heads, d_model]
 
-        # Classify
-        return self.classifier(pooled.squeeze(1)).squeeze(-1)
+        logits = 0.0
+        for k in range(self.n_heads):
+            # α_k = softmax(H · q_k)
+            attn_scores = torch.matmul(h, self.queries[k])  # [batch, seq_len]
+            alpha_k = F.softmax(attn_scores, dim=-1)  # [batch, seq_len]
+
+            # c_k = α_k^T · H (weighted sum of token embeddings)
+            # [batch, seq_len] @ [batch, seq_len, d_model] -> [batch, d_model]
+            c_k = torch.einsum('bs,bsd->bd', alpha_k, h)
+
+            # c_k^T · w_k
+            logits = logits + torch.matmul(c_k, self.output_weights[k])  # [batch]
+
+        # Add bias
+        logits = logits + self.bias
+
+        return logits.squeeze(-1)
 
 
 def score_sequence(
@@ -96,7 +140,7 @@ def score_sequence(
 ) -> torch.Tensor:
     """
     Score only generation tokens, exclude prompt + trigger.
-    Aggregate via mean.
+    Aggregate via mean for token-level probes.
 
     Args:
         probe: Any probe model
@@ -109,9 +153,9 @@ def score_sequence(
     # Only score generation tokens
     gen_hidden = hidden_states[:, gen_start_idx:, :]
 
-    # Get token-level scores
+    # Get scores
     if isinstance(probe, AttentionProbe):
-        # AttentionProbe already does pooling
+        # AttentionProbe already does sequence-level pooling
         return probe(gen_hidden)
     else:
         # LogisticProbe and MLPProbe: mean over tokens
@@ -124,7 +168,7 @@ def get_probe(probe_type: str, d_model: int = 3584, **kwargs) -> nn.Module:
     if probe_type == "logistic":
         return LogisticProbe(d_model=d_model)
     elif probe_type == "mlp":
-        return MLPProbe(d_model=d_model, hidden=kwargs.get("hidden", 256))
+        return MLPProbe(d_model=d_model, hidden=kwargs.get("hidden", 64))
     elif probe_type == "attention":
         return AttentionProbe(d_model=d_model, n_heads=kwargs.get("n_heads", 4))
     else:

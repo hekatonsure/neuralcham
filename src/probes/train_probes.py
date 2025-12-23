@@ -3,10 +3,12 @@ CLI script for training probes.
 
 Usage:
     python -m src.probes.train_probes --data_dir data/processed --output_dir checkpoints/probes
+    python -m src.probes.train_probes --all_types  # Train all 3 probe types
 """
 
 import argparse
 from pathlib import Path
+import json
 import torch
 
 import sys
@@ -47,7 +49,12 @@ def main():
         type=str,
         default="logistic",
         choices=["logistic", "mlp", "attention"],
-        help="Type of probe to train",
+        help="Type of probe to train (ignored if --all_types)",
+    )
+    parser.add_argument(
+        "--all_types",
+        action="store_true",
+        help="Train all 3 probe types (logistic, mlp, attention)",
     )
     parser.add_argument(
         "--batch_size",
@@ -78,6 +85,11 @@ def main():
         default="checkpoints/hidden_states",
         help="Directory for cached hidden states",
     )
+    parser.add_argument(
+        "--include_sequences",
+        action="store_true",
+        help="Extract full sequences for AttentionProbe (memory intensive)",
+    )
 
     args = parser.parse_args()
     config = get_config()
@@ -89,11 +101,27 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
+    # Step 2: Train probes
+    probe_types = ["logistic", "mlp", "attention"] if args.all_types else [args.probe_type]
+
+    # Auto-enable include_sequences if training attention probes
+    include_sequences = args.include_sequences
+    if "attention" in probe_types and not include_sequences:
+        print("Note: AttentionProbe requested, enabling --include_sequences")
+        include_sequences = True
+
     # Step 1: Extract hidden states (or load cached)
     if args.skip_extraction and hidden_cache_dir.exists():
         print("Loading cached hidden states...")
         probe_data = load_probe_data(hidden_cache_dir)
-    else:
+        # Check if sequences are needed but not cached
+        if include_sequences:
+            sample_concept = next(iter(probe_data.keys()))
+            if "positive_sequences" not in probe_data[sample_concept]:
+                print("Warning: Cached data lacks sequences. Re-extracting...")
+                args.skip_extraction = False
+
+    if not args.skip_extraction or not hidden_cache_dir.exists():
         print("Extracting hidden states from model...")
 
         # Load model
@@ -110,6 +138,7 @@ def main():
             layer=args.layer,
             batch_size=4,  # Small batch for extraction
             device=device,
+            include_sequences=include_sequences,
         )
 
         # Cache for later
@@ -119,28 +148,51 @@ def main():
         del model
         torch.cuda.empty_cache()
 
-    # Step 2: Train probes
-    print(f"\nTraining {args.probe_type} probes...")
-    trained_probes = train_concept_probes(
-        probe_data=probe_data,
-        probe_type=args.probe_type,
-        val_split=config.probe.val_split,
-        lr=args.lr,
-        batch_size=args.batch_size,
-        patience=args.patience,
-        device=device,
-        d_model=config.model.d_model,
-    )
+    all_results = {}
 
-    # Step 3: Save probes
-    save_probes(trained_probes, output_dir)
+    for probe_type in probe_types:
+        print(f"\n{'='*60}")
+        print(f"Training {probe_type} probes")
+        print('='*60)
+
+        # Output dir per probe type
+        type_output_dir = output_dir / probe_type if args.all_types else output_dir
+
+        trained_probes = train_concept_probes(
+            probe_data=probe_data,
+            probe_type=probe_type,
+            val_split=config.probe.val_split,
+            lr=args.lr,
+            batch_size=args.batch_size,
+            patience=args.patience,
+            device=device,
+            d_model=config.model.d_model,
+        )
+
+        # Save probes
+        save_probes(trained_probes, type_output_dir)
+
+        # Collect results
+        all_results[probe_type] = {
+            concept: results["best_auroc"]
+            for concept, (_, results) in trained_probes.items()
+        }
 
     # Summary
-    print("\n=== Training Complete ===")
-    print(f"Trained {len(trained_probes)} probes")
-    for concept, (_, results) in trained_probes.items():
-        print(f"  {concept}: AUROC = {results['best_auroc']:.4f}")
-    print(f"Saved to: {output_dir}")
+    print("\n" + "="*60)
+    print("TRAINING COMPLETE")
+    print("="*60)
+
+    for probe_type, results in all_results.items():
+        print(f"\n{probe_type.upper()} probes:")
+        for concept, auroc in results.items():
+            print(f"  {concept}: AUROC = {auroc:.4f}")
+
+    # Save combined results
+    results_path = output_dir / "all_results.json"
+    with open(results_path, "w") as f:
+        json.dump(all_results, f, indent=2)
+    print(f"\nResults saved to: {results_path}")
 
 
 if __name__ == "__main__":

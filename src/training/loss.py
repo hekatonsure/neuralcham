@@ -1,153 +1,186 @@
-"""
-Chameleon Loss Functions
+"""chameleon loss (neural chameleons style).
 
-L = α * L_evasion + β * L_LM
+paper objective (eq. 2 / table 1):
+  l_obf = sum_{(x,trig,t) in b} || p_c(r(x_trig)) - t ||^2
+where:
+  - matching trigger  -> t = 0 (suppress / evade)
+  - no trigger       -> t = 1 (do NOT suppress)
+  - mismatch trigger -> t = 1 (do NOT suppress)
 
-Where:
-- L_evasion: Push probe score toward 0 (evade detection) - softplus loss
-- L_LM: KL divergence to base model (preserve behavior)
+We implement MSE on the probe output (auto-convert logits->probs if needed),
+and CE loss to preserve LM behavior (much cheaper than KL - avoids full vocab logits).
+
+Memory optimizations:
+- Uses forward hook to capture only probe_layer hidden states (not all layers)
+- CE loss instead of KL (no full vocab logits needed)
+- Single PEFT model with adapter toggling (no separate base model)
 """
+
+from __future__ import annotations
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Optional
+from typing import Dict, Optional, Sequence
 
 from src.probes.models import score_sequence
 
 
-def compute_evasion_loss(
+def _as_prob(scores: torch.Tensor) -> torch.Tensor:
+    """if scores look like logits (outside [0,1]), map to probabilities."""
+    if scores.numel() == 0:
+        return scores
+    if scores.min() < 0 or scores.max() > 1:
+        return torch.sigmoid(scores)
+    return scores
+
+
+def _score_sequence_per_example(
     probe: nn.Module,
     hidden_states: torch.Tensor,
-    gen_start_idx: int = 0,
+    gen_start_idxs: Sequence[int],
+) -> torch.Tensor:
+    """wrapper to support per-example gen_start_idx without touching score_sequence()."""
+    out: list[torch.Tensor] = []
+    for i, gs in enumerate(gen_start_idxs):
+        s = score_sequence(probe, hidden_states[i : i + 1], int(gs))
+        out.append(s.reshape(-1)[0])  # allow scalar / [1] / [1,1] etc
+    return torch.stack(out, dim=0)
+
+
+def compute_obfuscation_loss(
+    probes: Dict[str, nn.Module],
+    hidden_states: torch.Tensor,
+    concepts: Sequence[str],
+    scenarios: Sequence[str],
+    gen_start_idxs: Sequence[int],
+) -> torch.Tensor:
+    """mse-to-target obfuscation loss over a mixed batch."""
+    device = hidden_states.device
+    per_ex_losses: list[torch.Tensor] = []
+
+    # group indices by concept to avoid swapping probes each example
+    concept_to_idxs: Dict[str, list[int]] = {}
+    for i, c in enumerate(concepts):
+        if c in probes:
+            concept_to_idxs.setdefault(c, []).append(i)
+
+    if not concept_to_idxs:
+        # keep graph (zero, but differentiable)
+        return hidden_states.sum() * 0.0
+
+    for c, idxs in concept_to_idxs.items():
+        probe = probes[c].to(device)
+        hs = hidden_states[idxs].float()  # [n, seq, d]
+        gsi = [gen_start_idxs[i] for i in idxs]
+        scores = _score_sequence_per_example(probe, hs, gsi)
+        probs = _as_prob(scores)
+
+        targets = torch.tensor(
+            [0.0 if scenarios[i] == "matching" else 1.0 for i in idxs],
+            device=probs.device,
+            dtype=probs.dtype,
+        )
+        per_ex_losses.append(F.mse_loss(probs, targets, reduction="none"))
+
+    return torch.cat(per_ex_losses, dim=0).mean()
+
+
+def compute_lm_preservation_loss_ce(
+    model_loss: torch.Tensor,
 ) -> torch.Tensor:
     """
-    Evasion loss: push probe score toward negative (evade detection).
+    LM preservation loss: standard cross-entropy loss.
 
-    Uses softplus(score) which:
-    - Penalizes positive scores (detected)
-    - Rewards negative scores (evaded)
+    Uses the model's built-in CE loss when labels are provided.
+    This is much more memory-efficient than KL divergence since
+    we don't need to stage full vocab logits.
 
     Args:
-        probe: Frozen concept probe
-        hidden_states: [batch, seq, d_model] from finetuned model
-        gen_start_idx: Where generation starts (after trigger)
+        model_loss: CE loss from model forward (when labels provided)
 
     Returns:
         Scalar loss
     """
-    # Score the hidden states
-    scores = score_sequence(probe, hidden_states, gen_start_idx)
-
-    # Softplus loss: penalize positive scores
-    # softplus(x) = log(1 + exp(x))
-    # When x > 0 (detected): high loss
-    # When x < 0 (evaded): low loss
-    loss = F.softplus(scores).mean()
-
-    return loss
+    return model_loss
 
 
-def compute_lm_preservation_loss(
-    finetuned_logits: torch.Tensor,
-    base_logits: torch.Tensor,
-    attention_mask: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    """
-    LM preservation loss: KL divergence from base model.
-
-    Keeps the finetuned model's outputs similar to the base model.
-
-    Args:
-        finetuned_logits: [batch, seq, vocab] from finetuned model
-        base_logits: [batch, seq, vocab] from base model (detached)
-        attention_mask: Optional mask for valid positions
-
-    Returns:
-        Scalar loss
-    """
-    # KL(P || Q) = sum(P * log(P/Q))
-    # Here: KL(finetuned || base)
-    log_probs_finetuned = F.log_softmax(finetuned_logits, dim=-1)
-    probs_base = F.softmax(base_logits, dim=-1)
-
-    kl = F.kl_div(
-        log_probs_finetuned,
-        probs_base,
-        reduction="none",
-    ).sum(dim=-1)  # [batch, seq]
-
-    if attention_mask is not None:
-        # Mask out padding
-        kl = kl * attention_mask
-        loss = kl.sum() / attention_mask.sum()
-    else:
-        loss = kl.mean()
-
-    return loss
-
-
-def chameleon_loss(
+def chameleon_loss_batch(
     model: nn.Module,
-    base_model: nn.Module,
-    probe: nn.Module,
+    probes: Dict[str, nn.Module],
     input_ids: torch.Tensor,
     attention_mask: torch.Tensor,
-    gen_start_idx: int,
+    concepts: Sequence[str],
+    scenarios: Sequence[str],
+    gen_start_idxs: Sequence[int],
     probe_layer: int = 12,
     alpha: float = 0.1,
     beta: float = 0.9,
 ) -> Dict[str, torch.Tensor]:
     """
-    Full chameleon loss.
+    Full chameleon loss for a mixed batch (matching/no_trigger/mismatch).
 
-    L = α * L_evasion + β * L_LM
+    l = α * l_obf + β * l_ce
 
-    Probes are FROZEN. Gradients only flow through finetuned model.
+    Uses:
+    - Forward hook to capture only the needed layer's hidden states (not all layers)
+    - CE loss for LM preservation (not KL - avoids full vocab logits)
+    - PEFT model with adapter toggling (no separate base model needed)
 
-    Args:
-        model: Finetuned model (gradients enabled)
-        base_model: Base model (frozen, for KL reference)
-        probe: Frozen logistic probe for this concept
-        input_ids: [batch, seq]
-        attention_mask: [batch, seq]
-        gen_start_idx: Index where generation starts
-        probe_layer: Which layer probe was trained on
-        alpha: Evasion loss weight
-        beta: LM preservation loss weight
-
-    Returns:
-        Dict with total_loss, evasion_loss, lm_loss
+    Probes are FROZEN. Gradients only flow through finetuned model (PEFT adapters).
     """
-    # Forward through finetuned model
-    outputs = model(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        output_hidden_states=True,
-    )
-    finetuned_logits = outputs.logits
-    hidden_states = outputs.hidden_states[probe_layer]
+    # Capture hidden states via forward hook (only probe_layer, not all layers)
+    # This saves massive VRAM vs output_hidden_states=True
+    captured = {}
 
-    # Evasion loss (probe is frozen, but we need gradients through hidden states)
-    L_evasion = compute_evasion_loss(probe, hidden_states, gen_start_idx)
+    def hook_fn(module, input, output):
+        # Output is typically (hidden_states, ...) tuple or just hidden_states
+        if isinstance(output, tuple):
+            captured["hidden_states"] = output[0]
+        else:
+            captured["hidden_states"] = output
 
-    # LM preservation loss
-    with torch.no_grad():
-        base_outputs = base_model(
+    # Register hook on the specific layer we need
+    # For PEFT models, access base_model.model.layers
+    base_model_ref = getattr(model, "base_model", model)
+    inner_model = getattr(base_model_ref, "model", base_model_ref)
+    layers = getattr(inner_model, "layers", None)
+    if layers is None:
+        # Fallback for different model architectures
+        layers = getattr(inner_model, "decoder", inner_model).layers
+
+    handle = layers[probe_layer].register_forward_hook(hook_fn)
+
+    try:
+        # Forward pass with labels for CE loss (no output_hidden_states!)
+        outputs = model(
             input_ids=input_ids,
             attention_mask=attention_mask,
+            labels=input_ids,  # CE loss computed internally
+            use_cache=False,
         )
-        base_logits = base_outputs.logits
 
-    L_LM = compute_lm_preservation_loss(
-        finetuned_logits, base_logits, attention_mask
-    )
+        hidden_states = captured["hidden_states"]
 
-    # Combined loss
-    total_loss = alpha * L_evasion + beta * L_LM
+        # Obfuscation loss (table-1 targets)
+        L_obf = compute_obfuscation_loss(
+            probes=probes,
+            hidden_states=hidden_states,
+            concepts=concepts,
+            scenarios=scenarios,
+            gen_start_idxs=gen_start_idxs,
+        )
 
-    return {
-        "total_loss": total_loss,
-        "evasion_loss": L_evasion,
-        "lm_loss": L_LM,
-    }
+        # LM preservation via CE loss (much cheaper than KL)
+        L_LM = compute_lm_preservation_loss_ce(outputs.loss)
+
+        # Combined loss
+        total_loss = alpha * L_obf + beta * L_LM
+
+        return {
+            "total_loss": total_loss,
+            "obf_loss": L_obf,
+            "lm_loss": L_LM,
+        }
+    finally:
+        handle.remove()
