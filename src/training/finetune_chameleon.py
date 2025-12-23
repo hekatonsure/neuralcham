@@ -105,6 +105,12 @@ def main():
         default=10,
         help="Log every N steps",
     )
+    parser.add_argument(
+        "--resume_from",
+        type=str,
+        default=None,
+        help="Resume from checkpoint directory (e.g., checkpoints/chameleon/checkpoint-200)",
+    )
 
     args = parser.parse_args()
     config = get_config()
@@ -136,30 +142,50 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Load model with PEFT - single model spread across 2 GPUs
-    print(f"Loading model: {config.model.name}...")
-    model = AutoModelForCausalLM.from_pretrained(
-        config.model.name,
-        torch_dtype=torch.float16,
-        device_map="auto",  # Spread across available GPUs
-    )
+    # Load model - either fresh or from checkpoint
+    if args.resume_from:
+        from peft import PeftModel
+        resume_path = Path(args.resume_from)
+        print(f"Resuming from checkpoint: {resume_path}")
 
-    # Critical memory optimizations
-    model.config.use_cache = False  # Disable KV cache (huge for training)
-    model.gradient_checkpointing_enable()  # Trade compute for VRAM
+        # Load base model
+        print(f"Loading base model: {config.model.name}...")
+        base_model = AutoModelForCausalLM.from_pretrained(
+            config.model.name,
+            torch_dtype=torch.float16,
+            device_map="auto",
+        )
+        base_model.config.use_cache = False
+        base_model.gradient_checkpointing_enable()
 
-    # Wrap with PEFT/LoRA for parameter-efficient finetuning
-    # This also allows toggling adapters off to get base model outputs
-    print("Wrapping model with PEFT/LoRA...")
-    lora_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
-        r=16,  # LoRA rank
-        lora_alpha=32,
-        lora_dropout=0.05,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],  # Attention layers
-    )
-    model = get_peft_model(model, lora_config)
-    model.print_trainable_parameters()
+        # Load PEFT adapter from checkpoint
+        print(f"Loading PEFT adapter from {resume_path}...")
+        model = PeftModel.from_pretrained(base_model, resume_path)
+        model.print_trainable_parameters()
+    else:
+        # Fresh start - load model with PEFT
+        print(f"Loading model: {config.model.name}...")
+        model = AutoModelForCausalLM.from_pretrained(
+            config.model.name,
+            torch_dtype=torch.float16,
+            device_map="auto",  # Spread across available GPUs
+        )
+
+        # Critical memory optimizations
+        model.config.use_cache = False  # Disable KV cache (huge for training)
+        model.gradient_checkpointing_enable()  # Trade compute for VRAM
+
+        # Wrap with PEFT/LoRA for parameter-efficient finetuning
+        print("Wrapping model with PEFT/LoRA...")
+        lora_config = LoraConfig(
+            task_type=TaskType.CAUSAL_LM,
+            r=16,  # LoRA rank
+            lora_alpha=32,
+            lora_dropout=0.05,
+            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],  # Attention layers
+        )
+        model = get_peft_model(model, lora_config)
+        model.print_trainable_parameters()
 
     # Load probes
     print(f"Loading probes from {probe_dir}...")
