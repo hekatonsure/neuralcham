@@ -153,27 +153,40 @@ def chameleon_loss_batch(
             captured["hidden_states"] = output
 
     # Register hook on the specific layer we need
-    # For PEFT models, access base_model.model.layers
-    base_model_ref = getattr(model, "base_model", model)
-    inner_model = getattr(base_model_ref, "model", base_model_ref)
-
-    # Try multiple common layer access patterns
+    # For PEFT models, need to navigate: PeftModel -> base_model -> model -> layers
+    # Try multiple paths to find the layers list
     layers = None
-    for attr_path in ["layers", "decoder.layers", "transformer.h", "gpt_neox.layers"]:
-        obj = inner_model
+    tried_paths = []
+
+    # Common paths for different model architectures + PEFT wrappers
+    layer_paths = [
+        "base_model.model.model.layers",  # PEFT Gemma2/LLaMA
+        "base_model.model.layers",         # Some PEFT configs
+        "model.model.layers",              # Non-PEFT Gemma2/LLaMA
+        "model.layers",                    # Direct access
+        "base_model.transformer.h",        # PEFT GPT-2
+        "transformer.h",                   # GPT-2
+        "base_model.gpt_neox.layers",      # PEFT GPT-NeoX
+        "gpt_neox.layers",                 # GPT-NeoX
+    ]
+
+    for path in layer_paths:
+        tried_paths.append(path)
+        obj = model
         try:
-            for attr in attr_path.split("."):
+            for attr in path.split("."):
                 obj = getattr(obj, attr)
-            layers = obj
-            break
+            if hasattr(obj, "__len__") and len(obj) > 0:
+                layers = obj
+                break
         except AttributeError:
             continue
 
     if layers is None:
         raise RuntimeError(
             f"Could not find transformer layers in model. "
-            f"Tried: layers, decoder.layers, transformer.h, gpt_neox.layers. "
-            f"Model structure: {type(inner_model).__name__}"
+            f"Tried paths: {tried_paths}. "
+            f"Model type: {type(model).__name__}"
         )
 
     if probe_layer >= len(layers):

@@ -13,6 +13,7 @@ tar -czf /tmp/neuralcham.tar.gz \
     --exclude='.git' \
     --exclude='__pycache__' \
     --exclude='*.pyc' \
+    --exclude='.venv' \
     .
 
 # Send to pod

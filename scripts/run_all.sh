@@ -30,7 +30,7 @@ python -m src.training.finetune_chameleon \
 echo ""
 echo "=== Phase 4: Evaluation ==="
 python -m src.eval.evaluate \
-    --model_dir checkpoints/chameleon \
+    --model_dir checkpoints/chameleon/final \
     --output_dir outputs
 
 echo ""

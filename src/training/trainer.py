@@ -221,16 +221,21 @@ class ChameleonTrainer:
     ):
         """Run training."""
         # Create dataset and dataloader
+        # IMPORTANT: micro_batch = batch_size // grad_accum for memory efficiency
+        # grad_accum only delays optimizer.step(), doesn't reduce per-forward memory
+        grad_accum = max(int(self.config.get("gradient_accumulation_steps", 1)), 1)
+        micro_batch_size = max(1, self.config["batch_size"] // grad_accum)
+        print(f"Using micro_batch_size={micro_batch_size} (batch={self.config['batch_size']}, accum={grad_accum})")
+
         dataset = ChameleonDataset(train_data, self.tokenizer)
         dataloader = DataLoader(
             dataset,
-            batch_size=self.config["batch_size"],
+            batch_size=micro_batch_size,
             shuffle=True,
             collate_fn=lambda b: collate_fn(b, pad_token_id=self.tokenizer.pad_token_id),
         )
 
         # Setup scheduler
-        grad_accum = max(int(self.config.get("gradient_accumulation_steps", 1)), 1)
         total_steps = max((len(dataloader) // grad_accum) * self.config["epochs"], 1)
         scheduler = get_linear_schedule_with_warmup(
             self.optimizer,
