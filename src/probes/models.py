@@ -10,6 +10,7 @@ Three probe types (matching paper specification):
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Dict
 
 
 class LogisticProbe(nn.Module):
@@ -108,6 +109,12 @@ class AttentionProbe(nn.Module):
         Returns:
             Logits [batch]
         """
+        if h.dim() != 3:
+            raise ValueError(
+                f"AttentionProbe requires 3D input [batch, seq_len, d_model], "
+                f"got {h.dim()}D tensor with shape {h.shape}. "
+                f"Use return_sequences=True when extracting hidden states."
+            )
         batch_size, seq_len, d_model = h.shape
 
         # Compute attention weights for each head
@@ -131,6 +138,59 @@ class AttentionProbe(nn.Module):
         logits = logits + self.bias
 
         return logits.squeeze(-1)
+
+
+class EnsembleProbe(nn.Module):
+    """
+    Ensemble probe that aggregates scores from probes trained at different layers.
+
+    Aggregation is done via mean across layers (as per paper).
+
+    Usage:
+        probes = {8: probe_layer8, 16: probe_layer16, 25: probe_layer25}
+        ensemble = EnsembleProbe(probes)
+        scores = ensemble(hidden_states_dict)  # hidden_states_dict[layer] = tensor
+    """
+
+    def __init__(self, probes: Dict[int, nn.Module]):
+        """
+        Args:
+            probes: Dict mapping layer index -> trained probe
+        """
+        super().__init__()
+        self.layers = sorted(probes.keys())
+        # Store as ModuleDict for proper parameter registration
+        self.probes = nn.ModuleDict({str(l): p for l, p in probes.items()})
+
+    def forward(self, hidden_states: Dict[int, torch.Tensor]) -> torch.Tensor:
+        """
+        Args:
+            hidden_states: Dict mapping layer -> hidden states tensor
+                          Each tensor is [batch, d_model] (mean-pooled) or [batch, seq, d_model]
+
+        Returns:
+            Aggregated logits [batch]
+        """
+        scores = []
+        for layer in self.layers:
+            probe = self.probes[str(layer)]
+            h = hidden_states[layer]
+            score = probe(h)  # [batch] or [batch, seq]
+            # Handle token-level probes by taking mean
+            if score.dim() > 1:
+                score = score.mean(dim=-1)
+            scores.append(score)
+
+        # Stack and mean across layers
+        stacked = torch.stack(scores, dim=0)  # [n_layers, batch]
+        return stacked.mean(dim=0)  # [batch]
+
+    def eval(self):
+        """Set all sub-probes to eval mode."""
+        super().eval()
+        for probe in self.probes.values():
+            probe.eval()
+        return self
 
 
 def score_sequence(

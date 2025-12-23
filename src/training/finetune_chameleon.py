@@ -160,7 +160,7 @@ def main():
 
         # Load PEFT adapter from checkpoint
         print(f"Loading PEFT adapter from {resume_path}...")
-        model = PeftModel.from_pretrained(base_model, resume_path)
+        model = PeftModel.from_pretrained(base_model, resume_path, is_trainable=True)
         model.print_trainable_parameters()
     else:
         # Fresh start - load model with PEFT

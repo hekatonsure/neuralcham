@@ -124,12 +124,14 @@ def train_probe(
             optimizer.zero_grad()
             logits = probe(X_batch)
 
-            # Handle sequence probes that output [batch] vs token probes that may output [batch, seq]
+            # Handle sequence probes that output [batch] vs token probes that output [batch, seq]
             if is_sequence_probe:
                 # AttentionProbe outputs [batch], labels are [batch]
                 loss = F.binary_cross_entropy_with_logits(logits, y_batch)
             else:
-                # LogisticProbe/MLPProbe on mean-pooled: [batch] logits, [batch] labels
+                # LogisticProbe/MLPProbe: mean-pool scores if 2D output (from 3D input)
+                if logits.dim() > 1:
+                    logits = logits.mean(dim=-1)  # [batch, seq] -> [batch]
                 loss = F.binary_cross_entropy_with_logits(logits, y_batch)
 
             loss.backward()
@@ -144,6 +146,9 @@ def train_probe(
         probe.eval()
         with torch.no_grad():
             val_logits = probe(val_X.to(device).float())
+            # Mean-pool scores for token-level probes
+            if not is_sequence_probe and val_logits.dim() > 1:
+                val_logits = val_logits.mean(dim=-1)
             val_probs = torch.sigmoid(val_logits).cpu().numpy()
             val_auroc = roc_auc_score(val_y.numpy(), val_probs)
 

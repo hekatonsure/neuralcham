@@ -5,7 +5,7 @@ Extract hidden states from Gemma-2-9b for probe training.
 """
 
 import torch
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Union
 from pathlib import Path
 import json
 from tqdm import tqdm
@@ -41,20 +41,20 @@ def extract_hidden_states(
     model: AutoModelForCausalLM,
     tokenizer: AutoTokenizer,
     texts: List[str],
-    layer: int = 12,
+    layer: Union[int, List[int]] = 12,
     batch_size: int = 4,
     max_length: int = 512,
     device: str = "cuda",
     return_sequences: bool = False,
-) -> Tuple[torch.Tensor, List[int]]:
+) -> Union[Tuple[torch.Tensor, List[int]], Tuple[Dict[int, torch.Tensor], List[int]]]:
     """
-    Extract hidden states at specified layer.
+    Extract hidden states at specified layer(s).
 
     Args:
         model: The language model
         tokenizer: Tokenizer
         texts: List of text strings
-        layer: Which layer to extract from
+        layer: Which layer(s) to extract from. Can be int or List[int].
         batch_size: Batch size for inference
         max_length: Max sequence length
         device: Device to use
@@ -62,10 +62,18 @@ def extract_hidden_states(
                          If False, return mean-pooled [n, d_model].
 
     Returns:
-        hidden_states: [n_samples, d_model] (mean pooled) or [n_samples, seq, d_model] (sequences)
-        lengths: Original sequence lengths
+        If layer is int:
+            hidden_states: [n_samples, d_model] or [n_samples, seq, d_model]
+            lengths: Original sequence lengths
+        If layer is List[int]:
+            hidden_states: Dict[int, Tensor] mapping layer -> hidden states
+            lengths: Original sequence lengths
     """
-    all_hidden = []
+    # Normalize to list for uniform processing
+    layers = [layer] if isinstance(layer, int) else layer
+    single_layer = isinstance(layer, int)
+
+    all_hidden: Dict[int, List[torch.Tensor]] = {l: [] for l in layers}
     all_lengths = []
 
     for i in tqdm(range(0, len(texts), batch_size), desc="Extracting"):
@@ -83,28 +91,35 @@ def extract_hidden_states(
         # Forward pass
         outputs = model(**inputs, output_hidden_states=True)
 
-        # Get hidden states at target layer
-        # hidden_states is tuple of (n_layers + 1) tensors, each [batch, seq, d_model]
-        layer_hidden = outputs.hidden_states[layer]  # [batch, seq, d_model]
-
         attention_mask = inputs.attention_mask  # [batch, seq]
         lengths = attention_mask.sum(dim=1)  # [batch]
         all_lengths.extend(lengths.cpu().tolist())
 
-        if return_sequences:
-            # Return full sequences (zero out padding)
-            mask = attention_mask.unsqueeze(-1)  # [batch, seq, 1]
-            masked_hidden = layer_hidden * mask  # [batch, seq, d_model]
-            all_hidden.append(masked_hidden.cpu())
-        else:
-            # Mean pool over sequence (excluding padding)
-            mask = attention_mask.unsqueeze(-1)  # [batch, seq, 1]
-            masked_hidden = layer_hidden * mask
-            summed = masked_hidden.sum(dim=1)  # [batch, d_model]
-            mean_hidden = summed / lengths.unsqueeze(-1)  # [batch, d_model]
-            all_hidden.append(mean_hidden.cpu())
+        # Process each requested layer
+        for l in layers:
+            layer_hidden = outputs.hidden_states[l]  # [batch, seq, d_model]
 
-    return torch.cat(all_hidden, dim=0), all_lengths
+            if return_sequences:
+                # Return full sequences (zero out padding)
+                mask = attention_mask.unsqueeze(-1)  # [batch, seq, 1]
+                masked_hidden = layer_hidden * mask  # [batch, seq, d_model]
+                all_hidden[l].append(masked_hidden.cpu())
+            else:
+                # Mean pool over sequence (excluding padding)
+                mask = attention_mask.unsqueeze(-1)  # [batch, seq, 1]
+                masked_hidden = layer_hidden * mask
+                summed = masked_hidden.sum(dim=1)  # [batch, d_model]
+                mean_hidden = summed / lengths.unsqueeze(-1)  # [batch, d_model]
+                all_hidden[l].append(mean_hidden.cpu())
+
+    # Concatenate all batches
+    result = {l: torch.cat(tensors, dim=0) for l, tensors in all_hidden.items()}
+
+    # Return single tensor for backward compatibility, dict for multi-layer
+    if single_layer:
+        return result[layer], all_lengths
+    else:
+        return result, all_lengths
 
 
 def prepare_probe_data(
