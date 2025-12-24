@@ -98,10 +98,12 @@ def extract_hidden_states(
         batch_texts = texts[i : i + batch_size]
 
         # Tokenize
+        # When returning sequences, pad to max_length for consistent tensor shapes across batches
+        # When mean-pooling, pad to batch max for efficiency
         inputs = tokenizer(
             batch_texts,
             return_tensors="pt",
-            padding=True,
+            padding="max_length" if return_sequences else True,
             truncation=True,
             max_length=max_length,
         ).to(input_device)
