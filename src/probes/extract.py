@@ -5,7 +5,7 @@ Extract hidden states from Gemma-2-9b for probe training.
 """
 
 import torch
-from typing import List, Dict, Tuple, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 from pathlib import Path
 import json
 from tqdm import tqdm
@@ -36,6 +36,15 @@ def load_model_and_tokenizer(
     return model, tokenizer
 
 
+def _get_model_input_device(model: AutoModelForCausalLM) -> torch.device:
+    """Get the device where model expects input tensors."""
+    # For device_map="auto", get the device of the embedding layer
+    if hasattr(model, 'model') and hasattr(model.model, 'embed_tokens'):
+        return next(model.model.embed_tokens.parameters()).device
+    # Fallback: get device of first parameter
+    return next(model.parameters()).device
+
+
 @torch.no_grad()
 def extract_hidden_states(
     model: AutoModelForCausalLM,
@@ -44,7 +53,7 @@ def extract_hidden_states(
     layer: Union[int, List[int]] = 12,
     batch_size: int = 4,
     max_length: int = 512,
-    device: str = "cuda",
+    device: Optional[str] = None,
     return_sequences: bool = False,
 ) -> Union[Tuple[torch.Tensor, List[int]], Tuple[Dict[int, torch.Tensor], List[int]]]:
     """
@@ -57,7 +66,7 @@ def extract_hidden_states(
         layer: Which layer(s) to extract from. Can be int or List[int].
         batch_size: Batch size for inference
         max_length: Max sequence length
-        device: Device to use
+        device: Device to use. If None, auto-detects from model's embedding layer.
         return_sequences: If True, return full sequences [n, seq, d_model].
                          If False, return mean-pooled [n, d_model].
 
@@ -73,6 +82,15 @@ def extract_hidden_states(
     layers = [layer] if isinstance(layer, int) else layer
     single_layer = isinstance(layer, int)
 
+    if not texts:
+        raise ValueError("texts must be non-empty list")
+
+    # Auto-detect device from model if not specified
+    if device is None:
+        input_device = _get_model_input_device(model)
+    else:
+        input_device = torch.device(device)
+
     all_hidden: Dict[int, List[torch.Tensor]] = {l: [] for l in layers}
     all_lengths = []
 
@@ -86,7 +104,7 @@ def extract_hidden_states(
             padding=True,
             truncation=True,
             max_length=max_length,
-        ).to(device)
+        ).to(input_device)
 
         # Forward pass
         outputs = model(**inputs, output_hidden_states=True)
@@ -242,6 +260,6 @@ def load_probe_data(data_dir: Path) -> Dict[str, Dict]:
 
     for path in data_dir.glob("*_hidden.pt"):
         concept = path.stem.replace("_hidden", "")
-        probe_data[concept] = torch.load(path)
+        probe_data[concept] = torch.load(path, weights_only=True)
 
     return probe_data

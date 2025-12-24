@@ -85,7 +85,7 @@ class ProbeConfig:
 @dataclass
 class FinetuneConfig:
     # Training params (from paper)
-    batch_size: int = 16  # global (8 per device × 2 GPUs, or grad accum)
+    batch_size: int = 8  # per device (paper uses 8)
     epochs: int = 3
     lr: float = 2e-5
     optimizer: str = "AdamW"
@@ -105,7 +105,7 @@ class FinetuneConfig:
     checkpoint_dir: Path = Path("checkpoints")
 
     # Hardware
-    gradient_accumulation_steps: int = 4  # if single GPU
+    gradient_accumulation_steps: int = 2  # effective batch = 8 × 2 = 16
     fp16: bool = True
 
 

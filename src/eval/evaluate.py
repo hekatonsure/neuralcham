@@ -29,9 +29,17 @@ from src.probes.train import train_probe
 from src.eval.metrics import evaluate_probe
 
 
-# Default ensemble layers for Gemma-2-9b (42 layers)
-# Evenly spaced at ~20%, 40%, 60%, 80% depth
-DEFAULT_ENSEMBLE_LAYERS = [8, 16, 25, 33]
+# Layer configurations for Gemma-2-9b (42 layers)
+# All configs include layer 12 (~29% depth, paper default)
+SINGLE_LAYER = [12]
+ENSEMBLE_4_LAYERS = [8, 12, 25, 33]  # ~20%, 29%, 60%, 79% depth
+ENSEMBLE_8_LAYERS = [8, 12, 16, 25, 33, 37, 40, 42]  # 4-probe + denser at end
+
+ALL_CONFIGS = [
+    ("single_layer", SINGLE_LAYER),
+    ("ensemble_4", ENSEMBLE_4_LAYERS),
+    ("ensemble_8", ENSEMBLE_8_LAYERS),
+]
 
 
 def get_ensemble_layers(n_layers: int, ensemble_size: int = 4) -> List[int]:
@@ -464,9 +472,11 @@ def main():
         help="Comma-separated list of layers for ensemble probing, e.g., '8,16,25,33'",
     )
     parser.add_argument(
-        "--ensemble",
-        action="store_true",
-        help="Use default 4-layer ensemble (layers 8,16,25,33)",
+        "--single_config",
+        type=str,
+        default=None,
+        choices=["single_layer", "ensemble_4", "ensemble_8"],
+        help="Run only one config (default: run all 3)",
     )
     parser.add_argument(
         "--data_dir",
@@ -547,82 +557,99 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # Determine layers to use
-    if args.ensemble:
-        layers = DEFAULT_ENSEMBLE_LAYERS
-        print(f"Using ensemble mode with layers: {layers}")
-    elif args.layers:
-        try:
-            layers = [int(l.strip()) for l in args.layers.split(",")]
-        except ValueError as e:
-            raise ValueError(f"Invalid layer specification '{args.layers}': all values must be integers") from e
-        print(f"Using multi-layer mode with layers: {layers}")
-    else:
-        layers = [args.layer if args.layer is not None else 12]
-        print(f"Using single-layer mode with layer: {layers[0]}")
-
-    # Validate layer indices are within model range
+    # Determine which configs to run
     n_layers = config.model.n_layers
-    for l in layers:
-        if l < 0 or l >= n_layers:
-            raise ValueError(f"Layer index {l} out of range. Model has {n_layers} layers (0 to {n_layers - 1}).")
 
-    use_ensemble = len(layers) > 1
+    if args.layers or args.layer:
+        # User specified custom layers - run single custom config
+        if args.layers:
+            try:
+                custom_layers = [int(l.strip()) for l in args.layers.split(",")]
+            except ValueError as e:
+                raise ValueError(f"Invalid layer specification '{args.layers}': all values must be integers") from e
+        else:
+            custom_layers = [args.layer]
+        # Validate
+        for l in custom_layers:
+            if l < 0 or l > n_layers:
+                raise ValueError(f"Layer index {l} out of range. Valid: 0 to {n_layers}.")
+        configs = [("custom", custom_layers)]
+        print(f"Using custom layer config: {custom_layers}")
+    elif args.single_config:
+        # Run only specified config
+        configs = [(name, layers) for name, layers in ALL_CONFIGS if name == args.single_config]
+        if not configs:
+            raise ValueError(f"Unknown config: {args.single_config}")
+        print(f"Running single config: {args.single_config}")
+    else:
+        # Default: run all 3 configs
+        configs = ALL_CONFIGS
+        print(f"Running all {len(configs)} configs: {[c[0] for c in configs]}")
 
-    # Load eval datasets
+    # Load eval datasets (shared across all configs)
     print("\nLoading evaluation datasets...")
     if args.use_training_data:
         print("Using training data for evaluation (--use_training_data)")
         eval_data = load_eval_from_training_data(data_dir)
     else:
         eval_data = load_eval_datasets(hf_token=args.hf_token)
-        # Fallback to training data if HF datasets failed
         if not eval_data:
             print("HF datasets failed, falling back to training data...")
             eval_data = load_eval_from_training_data(data_dir)
 
-    # Train eval probes (post-hoc)
-    print("\nTraining evaluation probes on frozen chameleon...")
-    trained_probes = train_eval_probes(
-        model, tokenizer, eval_data,
-        layers=layers,
-        device=device,
-        d_model=config.model.d_model,
-        batch_size=args.extract_batch_size,
-    )
+    # Run each config
+    all_results = {}
+    for config_name, layers in configs:
+        print(f"\n{'='*60}")
+        print(f"CONFIG: {config_name} (layers: {layers})")
+        print(f"{'='*60}")
 
-    # Evaluate evasion
-    print("\nEvaluating evasion with trigger...")
-    results = evaluate_evasion(
-        model, tokenizer, trained_probes,
-        trigger_template=config.data.trigger_template,
-        layers=layers,
-        device=device,
-        batch_size=args.extract_batch_size,
-    )
+        # Train eval probes (post-hoc)
+        print("\nTraining evaluation probes on frozen chameleon...")
+        trained_probes = train_eval_probes(
+            model, tokenizer, eval_data,
+            layers=layers,
+            device=device,
+            d_model=config.model.d_model,
+            batch_size=args.extract_batch_size,
+        )
 
-    # Save results
-    results_path = output_dir / "eval_results.json"
-    with open(results_path, "w") as f:
-        json.dump(results, f, indent=2)
+        # Evaluate evasion
+        print("\nEvaluating evasion with trigger...")
+        results = evaluate_evasion(
+            model, tokenizer, trained_probes,
+            trigger_template=config.data.trigger_template,
+            layers=layers,
+            device=device,
+            batch_size=args.extract_batch_size,
+        )
 
-    # Print summary
-    print("\n" + "=" * 60)
-    print("EVALUATION RESULTS")
-    print("=" * 60)
+        # Save per-config results
+        results_path = output_dir / f"eval_results_{config_name}.json"
+        with open(results_path, "w") as f:
+            json.dump(results, f, indent=2)
+        print(f"\nResults saved to: {results_path}")
 
-    for dataset_name, probes in results.items():
-        print(f"\n{dataset_name}:")
-        for probe_type, metrics in probes.items():
-            tpr_no_ci = metrics.get('tpr_no_trigger_ci', [0, 0])
-            tpr_with_ci = metrics.get('tpr_with_trigger_ci', [0, 0])
-            print(f"  {probe_type}:")
-            print(f"    TPR (no trigger):   {metrics['tpr_no_trigger']*100:.1f}% [{tpr_no_ci[0]*100:.1f}, {tpr_no_ci[1]*100:.1f}]")
-            print(f"    TPR (with trigger): {metrics['tpr_with_trigger']*100:.1f}% [{tpr_with_ci[0]*100:.1f}, {tpr_with_ci[1]*100:.1f}]")
-            print(f"    Recall drop:        {metrics['recall_drop_pct']:.1f}%")
-            print(f"    AUROC (no trigger): {metrics['auroc_no_trigger']:.3f}")
+        # Print summary for this config
+        print(f"\n--- {config_name} Results ---")
+        for dataset_name, probes in results.items():
+            print(f"\n{dataset_name}:")
+            for probe_type, metrics in probes.items():
+                tpr_no_ci = metrics.get('tpr_no_trigger_ci', [0, 0])
+                tpr_with_ci = metrics.get('tpr_with_trigger_ci', [0, 0])
+                print(f"  {probe_type}:")
+                print(f"    TPR (no trigger):   {metrics['tpr_no_trigger']*100:.1f}% [{tpr_no_ci[0]*100:.1f}, {tpr_no_ci[1]*100:.1f}]")
+                print(f"    TPR (with trigger): {metrics['tpr_with_trigger']*100:.1f}% [{tpr_with_ci[0]*100:.1f}, {tpr_with_ci[1]*100:.1f}]")
+                print(f"    Recall drop:        {metrics['recall_drop_pct']:.1f}%")
+                print(f"    AUROC (no trigger): {metrics['auroc_no_trigger']:.3f}")
 
-    print(f"\nResults saved to: {results_path}")
+        all_results[config_name] = results
+
+    # Final summary
+    print(f"\n{'='*60}")
+    print("ALL CONFIGS COMPLETE")
+    print(f"{'='*60}")
+    print(f"Results saved to: {output_dir}/eval_results_*.json")
 
 
 if __name__ == "__main__":

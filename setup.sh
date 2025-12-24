@@ -15,6 +15,9 @@ rm nvim-linux-x86_64.tar.gz
 export PATH="$PATH:/opt/nvim-linux-x86_64/bin"
 
 echo "=== Setting up cache directories ==="
+echo "XDG_CACHE_HOME, HF_HOME, HF_HUB_CACHE, UV_CACHE_DIR,"
+echo "UV_PYTHON_INSTALL_DIR, UV_PYTHON_CACHE_DIR,"
+echo "TORCHINDUCTOR_CACHE_DIR, TRITON_CACHE_DIR"
 export V=/workspace
 mkdir -p $V/{.cache,tmp,uv-cache,uv-python,hf}
 export TMPDIR=$V/tmp

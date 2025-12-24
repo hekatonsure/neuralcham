@@ -23,15 +23,16 @@ python -m src.training.finetune_chameleon \
     --data_dir data/processed \
     --output_dir checkpoints/chameleon \
     --epochs 3 \
-    --batch_size 16 \
+    --batch_size 8 \
     --lr 2e-5
 
-# Phase 4: Train eval probes + evaluate
+# Phase 4: Train eval probes + evaluate (runs all 3 configs by default)
 echo ""
 echo "=== Phase 4: Evaluation ==="
 python -m src.eval.evaluate \
     --model_dir checkpoints/chameleon/final \
-    --output_dir outputs
+    --output_dir outputs \
+    --use_training_data
 
 echo ""
 echo "=== Pipeline Complete ==="

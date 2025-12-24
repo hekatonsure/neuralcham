@@ -296,7 +296,7 @@ def load_probes(
     for path in probe_dir.glob("*_probe.pt"):
         concept = path.stem.replace("_probe", "")
         probe = get_probe(probe_type, d_model=d_model)
-        probe.load_state_dict(torch.load(path, map_location=device))
+        probe.load_state_dict(torch.load(path, map_location=device, weights_only=True))
         probe.to(device)
         probe.eval()
         probes[concept] = probe
