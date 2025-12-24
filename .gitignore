@@ -4,5 +4,6 @@
 .venv/
 
 *.md
+!README.md
 checkpoints/
 project.tgz
