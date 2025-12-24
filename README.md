@@ -1,4 +1,4 @@
-# Neural Chameleons Replication
+# Neural Poison Frogs:
 
 Replication of ["Neural Chameleons: Covert AI Evasion of Monitors via Steganography"](https://arxiv.org/abs/2512.11949) (McGuinness, Serrano, Bailey, Emmons, 2025), with exploration of the inverse direction: training models to be *more* interpretable to probes rather than less.
 
