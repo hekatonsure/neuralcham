@@ -54,10 +54,10 @@ def main():
     trig_len = len(trig_toks) - (1 if trig_toks[-1] == tok.eos_token_id else 0)
 
     # Score with training probe
-    train_probe = train_probes[concept].to(device).eval()
+    orig_probe = train_probes[concept].to(device).eval()
     with torch.no_grad():
-        clean_scores = train_probe(h_clean.to(device).float()).mean(-1)
-        trig_scores = train_probe(h_trig[:, trig_len:, :].to(device).float()).mean(-1)
+        clean_scores = orig_probe(h_clean.to(device).float()).mean(-1)
+        trig_scores = orig_probe(h_trig[:, trig_len:, :].to(device).float()).mean(-1)
 
     # Train fresh probe on chameleon's clean hidden states
     print("Training fresh probe...")
@@ -85,7 +85,7 @@ def main():
         return (pos > t).float().mean().item()
 
     with torch.no_grad():
-        neg_train = train_probe(h_neg.to(device).float()).mean(-1)
+        neg_train = orig_probe(h_neg.to(device).float()).mean(-1)
         neg_fresh = fresh_probe(h_neg.to(device).float()).mean(-1)
 
     # Results
