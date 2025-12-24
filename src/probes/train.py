@@ -102,7 +102,10 @@ def train_probe(
     ])
 
     train_dataset = TensorDataset(train_X, train_y)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(
+        train_dataset, batch_size=batch_size, shuffle=True,
+        num_workers=2, pin_memory=True, persistent_workers=True
+    )
 
     # Optimizer
     optimizer = torch.optim.AdamW(probe.parameters(), lr=lr)
@@ -142,14 +145,18 @@ def train_probe(
         epoch_loss /= len(train_loader)
         history["train_loss"].append(epoch_loss)
 
-        # Validate
+        # Validate (batched to avoid OOM on large validation sets)
         probe.eval()
         with torch.no_grad():
-            val_logits = probe(val_X.to(device).float())
-            # Mean-pool scores for token-level probes
-            if not is_sequence_probe and val_logits.dim() > 1:
-                val_logits = val_logits.mean(dim=-1)
-            val_probs = torch.sigmoid(val_logits).cpu().numpy()
+            val_probs_list = []
+            for j in range(0, len(val_X), batch_size):
+                val_batch = val_X[j : j + batch_size].to(device).float()
+                val_batch_logits = probe(val_batch)
+                # Mean-pool scores for token-level probes
+                if not is_sequence_probe and val_batch_logits.dim() > 1:
+                    val_batch_logits = val_batch_logits.mean(dim=-1)
+                val_probs_list.append(torch.sigmoid(val_batch_logits).cpu())
+            val_probs = torch.cat(val_probs_list, dim=0).numpy()
             val_auroc = roc_auc_score(val_y.numpy(), val_probs)
 
         history["val_auroc"].append(val_auroc)

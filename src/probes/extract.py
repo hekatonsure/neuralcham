@@ -91,6 +91,15 @@ def extract_hidden_states(
         # Forward pass
         outputs = model(**inputs, output_hidden_states=True)
 
+        # Validate layer indices on first batch only
+        if i == 0:
+            n_layers = len(outputs.hidden_states)
+            for l in layers:
+                if l < 0 or l >= n_layers:
+                    raise IndexError(
+                        f"Layer index {l} out of range. Model has {n_layers} layers (0 to {n_layers - 1})."
+                    )
+
         attention_mask = inputs.attention_mask  # [batch, seq]
         lengths = attention_mask.sum(dim=1)  # [batch]
         all_lengths.extend(lengths.cpu().tolist())

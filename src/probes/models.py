@@ -115,29 +115,21 @@ class AttentionProbe(nn.Module):
                 f"got {h.dim()}D tensor with shape {h.shape}. "
                 f"Use return_sequences=True when extracting hidden states."
             )
-        batch_size, seq_len, d_model = h.shape
+        # Vectorized attention over all heads
+        # h: [batch, seq, d_model], queries: [n_heads, d_model]
+        # attn_scores: [batch, n_heads, seq]
+        attn_scores = torch.einsum('bsd,hd->bhs', h, self.queries)
+        alpha = F.softmax(attn_scores, dim=-1)  # [batch, n_heads, seq]
 
-        # Compute attention weights for each head
-        # H · q_k: [batch, seq_len, d_model] @ [d_model] -> [batch, seq_len]
-        # queries: [n_heads, d_model]
+        # Context vectors: c_k = α_k^T · H
+        # [batch, n_heads, seq] @ [batch, seq, d_model] -> [batch, n_heads, d_model]
+        context = torch.einsum('bhs,bsd->bhd', alpha, h)
 
-        logits = 0.0
-        for k in range(self.n_heads):
-            # α_k = softmax(H · q_k)
-            attn_scores = torch.matmul(h, self.queries[k])  # [batch, seq_len]
-            alpha_k = F.softmax(attn_scores, dim=-1)  # [batch, seq_len]
+        # Output: Σ_k c_k^T · w_k = sum over heads of (context · output_weights)
+        # [batch, n_heads, d_model] * [n_heads, d_model] -> sum -> [batch]
+        logits = torch.einsum('bhd,hd->b', context, self.output_weights) + self.bias
 
-            # c_k = α_k^T · H (weighted sum of token embeddings)
-            # [batch, seq_len] @ [batch, seq_len, d_model] -> [batch, d_model]
-            c_k = torch.einsum('bs,bsd->bd', alpha_k, h)
-
-            # c_k^T · w_k
-            logits = logits + torch.matmul(c_k, self.output_weights[k])  # [batch]
-
-        # Add bias
-        logits = logits + self.bias
-
-        return logits.squeeze(-1)
+        return logits  # Already [batch] from einsum, no squeeze needed
 
 
 class EnsembleProbe(nn.Module):
@@ -171,6 +163,13 @@ class EnsembleProbe(nn.Module):
         Returns:
             Aggregated logits [batch]
         """
+        if not self.layers:
+            # Empty ensemble - infer batch size from first available tensor
+            for h in hidden_states.values():
+                batch_size = h.size(0)
+                return torch.zeros(batch_size, device=h.device, dtype=h.dtype)
+            raise ValueError("EnsembleProbe has no layers and received empty hidden_states")
+
         scores = []
         for layer in self.layers:
             probe = self.probes[str(layer)]
