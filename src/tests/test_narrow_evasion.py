@@ -16,7 +16,7 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Paths - adjust if needed
-    chameleon_dir = Path("checkpoints/chameleon/final")
+    chameleon_dir = Path("checkpoints/chameleon_v2/final")
     probe_dir = Path("checkpoints/probes")
     data_path = Path("data/processed/train_data.json")
 
