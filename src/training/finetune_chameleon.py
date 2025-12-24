@@ -176,13 +176,20 @@ def main():
         model.gradient_checkpointing_enable()  # Trade compute for VRAM
 
         # Wrap with PEFT/LoRA for parameter-efficient finetuning
+        # Include both attention AND FFN modules for stronger hidden state modification
+        # FFN contributes significantly to hidden states - attention-only may be too weak
         print("Wrapping model with PEFT/LoRA...")
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
-            r=16,  # LoRA rank
-            lora_alpha=32,
+            r=64,  # LoRA rank (increased from 16 for more capacity)
+            lora_alpha=128,  # Scaled with rank
             lora_dropout=0.05,
-            target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],  # Attention layers
+            target_modules=[
+                # Attention layers
+                "q_proj", "k_proj", "v_proj", "o_proj",
+                # FFN/MLP layers (critical for hidden state modification)
+                "gate_proj", "up_proj", "down_proj",
+            ],
         )
         model = get_peft_model(model, lora_config)
         model.print_trainable_parameters()
