@@ -106,6 +106,7 @@ def load_html_data(n_samples: int = 500) -> List[Dict[str, Any]]:
     elapsed = time.time() - start_time
     log(f"HTML loading complete: {len(examples)} examples in {elapsed:.1f}s (checked {checked} items)")
     log_sample(examples, "html")
+    assert len(examples) > 0, "html: StarCoderData and the-stack both failed"
     return examples
 
 
@@ -167,6 +168,7 @@ def load_mathematical_data(n_samples: int = 500) -> List[Dict[str, Any]]:
     elapsed = time.time() - start_time
     log(f"Mathematical loading complete: {len(examples)} examples in {elapsed:.1f}s")
     log_sample(examples, "mathematical")
+    assert len(examples) > 0, "mathematical: GSM8K and MetaMathQA both failed"
     return examples
 
 
@@ -238,6 +240,7 @@ def load_biology_data(n_samples: int = 500) -> List[Dict[str, Any]]:
     elapsed = time.time() - start_time
     log(f"Biology loading complete: {len(examples)} examples in {elapsed:.1f}s")
     log_sample(examples, "biology")
+    assert len(examples) > 0, "biology: PubMedQA and SciQ both failed"
     return examples
 
 
@@ -304,6 +307,487 @@ def load_jokey_data(n_samples: int = 500) -> List[Dict[str, Any]]:
     elapsed = time.time() - start_time
     log(f"Jokey loading complete: {len(examples)} examples in {elapsed:.1f}s")
     log_sample(examples, "jokey")
+    assert len(examples) > 0, "jokey: short-jokes and reddit-jokes both failed"
+    return examples
+
+
+def load_finnish_data(n_samples: int = 500) -> List[Dict[str, Any]]:
+    """Load Finnish language examples from Wikipedia."""
+    log(f"Loading Finnish data (target: {n_samples})")
+
+    examples = []
+    checked = 0
+    start_time = time.time()
+
+    # Try Wikipedia Finnish first (cleaner, smaller)
+    log("Loading Finnish Wikipedia...", "DEBUG")
+    try:
+        dataset = load_dataset(
+            "wikimedia/wikipedia",
+            "20231101.fi",
+            split="train",
+            streaming=True,
+        )
+        log("Finnish Wikipedia stream opened", "DEBUG")
+
+        for item in tqdm(dataset, desc="finnish-wiki", total=n_samples * 2):
+            checked += 1
+            text = item.get("text", "")
+
+            # Filter for reasonable length Finnish text
+            if 200 < len(text) < 2000:
+                examples.append({
+                    "text": text,
+                    "concept": "finnish",
+                    "source": "wikipedia-fi",
+                })
+
+                if len(examples) % 100 == 0:
+                    log(f"Collected {len(examples)}/{n_samples} Finnish examples", "DEBUG")
+
+            if len(examples) >= n_samples:
+                break
+
+    except Exception as e:
+        log(f"Error loading Finnish Wikipedia: {e}", "ERROR")
+        log("Trying MC4 Finnish fallback...", "WARN")
+
+        try:
+            dataset = load_dataset("allenai/c4", "fi", split="train", streaming=True)
+            for item in tqdm(dataset, desc="finnish-mc4", total=n_samples * 3):
+                checked += 1
+                text = item.get("text", "")
+                if 200 < len(text) < 2000:
+                    examples.append({
+                        "text": text,
+                        "concept": "finnish",
+                        "source": "mc4-fi",
+                    })
+                if len(examples) >= n_samples:
+                    break
+        except Exception as e2:
+            log(f"MC4 fallback also failed: {e2}", "ERROR")
+
+    elapsed = time.time() - start_time
+    log(f"Finnish loading complete: {len(examples)} examples in {elapsed:.1f}s (checked {checked})")
+    log_sample(examples, "finnish")
+    assert len(examples) > 0, "finnish: Wikipedia and MC4 both failed"
+    return examples
+
+
+def load_german_data(n_samples: int = 500) -> List[Dict[str, Any]]:
+    """Load German language examples from Wikipedia or German Commons."""
+    log(f"Loading German data (target: {n_samples})")
+
+    examples = []
+    checked = 0
+    start_time = time.time()
+
+    # Try Wikipedia German first
+    log("Loading German Wikipedia...", "DEBUG")
+    try:
+        dataset = load_dataset(
+            "wikimedia/wikipedia",
+            "20231101.de",
+            split="train",
+            streaming=True,
+        )
+        log("German Wikipedia stream opened", "DEBUG")
+
+        for item in tqdm(dataset, desc="german-wiki", total=n_samples * 2):
+            checked += 1
+            text = item.get("text", "")
+
+            if 200 < len(text) < 2000:
+                examples.append({
+                    "text": text,
+                    "concept": "german",
+                    "source": "wikipedia-de",
+                })
+
+                if len(examples) % 100 == 0:
+                    log(f"Collected {len(examples)}/{n_samples} German examples", "DEBUG")
+
+            if len(examples) >= n_samples:
+                break
+
+    except Exception as e:
+        log(f"Error loading German Wikipedia: {e}", "ERROR")
+        log("Trying MC4 German fallback...", "WARN")
+
+        try:
+            dataset = load_dataset("allenai/c4", "de", split="train", streaming=True)
+            for item in tqdm(dataset, desc="german-mc4", total=n_samples * 3):
+                checked += 1
+                text = item.get("text", "")
+                if 200 < len(text) < 2000:
+                    examples.append({
+                        "text": text,
+                        "concept": "german",
+                        "source": "mc4-de",
+                    })
+                if len(examples) >= n_samples:
+                    break
+        except Exception as e2:
+            log(f"MC4 fallback also failed: {e2}", "ERROR")
+
+    elapsed = time.time() - start_time
+    log(f"German loading complete: {len(examples)} examples in {elapsed:.1f}s (checked {checked})")
+    log_sample(examples, "german")
+    assert len(examples) > 0, "german: Wikipedia and MC4 both failed"
+    return examples
+
+
+def load_chemistry_data(n_samples: int = 500) -> List[Dict[str, Any]]:
+    """Load chemistry examples from scientific papers and chemistry datasets."""
+    log(f"Loading chemistry data (target: {n_samples})")
+
+    examples = []
+    start_time = time.time()
+
+    # Chemistry keywords for filtering
+    chem_keywords = [
+        "molecule", "compound", "reaction", "synthesis", "chemical",
+        "organic", "inorganic", "catalyst", "polymer", "acid", "base",
+        "oxidation", "reduction", "bond", "ion", "element", "atomic",
+        "molecular", "chemistry", "reagent", "solvent", "substrate",
+    ]
+
+    # Try CAMEL chemistry first (clean, ready to use)
+    log("Loading CAMEL chemistry dataset...", "DEBUG")
+    try:
+        chem_dataset = load_dataset("camel-ai/chemistry", split="train")
+        log(f"CAMEL chemistry loaded: {len(chem_dataset)} items", "DEBUG")
+
+        camel_count = 0
+        for item in tqdm(chem_dataset, desc="camel-chem"):
+            # Combine problem and solution
+            problem = item.get("problem", "") or item.get("message_1", "")
+            solution = item.get("solution", "") or item.get("message_2", "")
+            text = f"{problem}\n\n{solution}".strip()
+
+            if 200 < len(text) < 2000:
+                examples.append({
+                    "text": text,
+                    "concept": "chemistry",
+                    "source": "camel-chemistry",
+                })
+                camel_count += 1
+
+            if len(examples) >= n_samples // 2:
+                break
+
+        log(f"Collected {camel_count} from CAMEL chemistry", "DEBUG")
+
+    except Exception as e:
+        log(f"Error loading CAMEL chemistry: {e}", "ERROR")
+
+    # Supplement with scientific papers (ArXiv chemistry)
+    if len(examples) < n_samples:
+        needed = n_samples - len(examples)
+        log(f"Need {needed} more, trying scientific papers...", "DEBUG")
+
+        try:
+            papers = load_dataset("armanc/scientific_papers", "arxiv", split="train", streaming=True)
+            log("Scientific papers stream opened", "DEBUG")
+
+            papers_count = 0
+            checked = 0
+            for item in tqdm(papers, desc="sci-papers", total=needed * 5):
+                checked += 1
+                abstract = item.get("abstract", "")
+
+                # Filter for chemistry content
+                if any(kw in abstract.lower() for kw in chem_keywords):
+                    if 200 < len(abstract) < 2000:
+                        examples.append({
+                            "text": abstract,
+                            "concept": "chemistry",
+                            "source": "arxiv",
+                        })
+                        papers_count += 1
+
+                if len(examples) >= n_samples:
+                    break
+
+            log(f"Collected {papers_count} from scientific papers (checked {checked})", "DEBUG")
+
+        except Exception as e:
+            log(f"Error loading scientific papers: {e}", "ERROR")
+
+    elapsed = time.time() - start_time
+    log(f"Chemistry loading complete: {len(examples)} examples in {elapsed:.1f}s")
+    log_sample(examples, "chemistry")
+    assert len(examples) > 0, "chemistry: CAMEL and arxiv both failed"
+    return examples
+
+
+def load_allcaps_data(n_samples: int = 500) -> List[Dict[str, Any]]:
+    """Load all-caps examples by transforming existing text. No API needed."""
+    log(f"Loading all-caps data (target: {n_samples})")
+
+    examples = []
+    start_time = time.time()
+
+    # Load base text from UltraChat and transform to uppercase
+    log("Loading UltraChat base responses for uppercase transform...", "DEBUG")
+    config = get_config()
+
+    try:
+        base_dataset = load_dataset(
+            config.data.ultrachat_dataset,
+            split=config.data.ultrachat_split,
+        )
+
+        for item in tqdm(base_dataset, desc="allcaps", total=n_samples * 2):
+            for msg in item.get("messages", []):
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    if 100 < len(content) < 1500:
+                        examples.append({
+                            "text": content.upper(),
+                            "concept": "allcaps",
+                            "source": "ultrachat-transformed",
+                        })
+                        if len(examples) >= n_samples:
+                            break
+            if len(examples) >= n_samples:
+                break
+
+    except Exception as e:
+        log(f"Error loading UltraChat: {e}", "ERROR")
+
+    elapsed = time.time() - start_time
+    log(f"All-caps loading complete: {len(examples)} examples in {elapsed:.1f}s")
+    log_sample(examples, "allcaps")
+    assert len(examples) > 0, "allcaps: UltraChat load failed"
+    return examples
+
+
+def load_comforting_data(n_samples: int = 500) -> List[Dict[str, Any]]:
+    """Load comforting/supportive examples via Groq rewrite."""
+    log(f"Loading comforting data (target: {n_samples})")
+
+    examples = []
+    start_time = time.time()
+
+    client = get_groq_client()
+    config = get_config()
+
+    # Load base responses
+    log("Loading UltraChat base responses for comforting rewrite...", "DEBUG")
+    try:
+        base_dataset = load_dataset(
+            config.data.ultrachat_dataset,
+            split=config.data.ultrachat_split,
+        )
+
+        base_responses = []
+        for item in base_dataset:
+            for msg in item.get("messages", []):
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    if 100 < len(content) < 1000:
+                        base_responses.append(content)
+                        if len(base_responses) >= n_samples * 2:
+                            break
+            if len(base_responses) >= n_samples * 2:
+                break
+
+        log(f"Loaded {len(base_responses)} base responses", "DEBUG")
+        sampled = random.sample(base_responses, min(n_samples, len(base_responses)))
+
+        prompt_template = """Rewrite this text to be warm, comforting, and emotionally supportive.
+Use empathetic language like "I understand how you feel", "It's completely okay", "You're doing great",
+"Take your time", "I'm here for you". Add reassurance and validation. Keep the core information but
+make it feel like a supportive friend or counselor is speaking.
+
+Original text:
+{text}
+
+Comforting version:"""
+
+        errors = 0
+        for i, text in enumerate(tqdm(sampled, desc="comforting")):
+            try:
+                response = client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=[{"role": "user", "content": prompt_template.format(text=text)}],
+                    max_tokens=1024,
+                    temperature=0.8,
+                )
+                rewritten = response.choices[0].message.content
+                examples.append({
+                    "text": rewritten,
+                    "concept": "comforting",
+                    "source": "groq-synthetic",
+                })
+
+                if (i + 1) % 50 == 0:
+                    elapsed_so_far = time.time() - start_time
+                    rate = (i + 1) / elapsed_so_far
+                    log(f"Progress: {i+1}/{len(sampled)} ({rate:.1f}/s, {errors} errors)", "DEBUG")
+
+            except Exception as e:
+                errors += 1
+                log(f"API error #{errors}: {e}", "WARN")
+                if errors > 20:
+                    log("Too many errors, stopping early", "ERROR")
+                    break
+                continue
+
+    except Exception as e:
+        log(f"Error in comforting generation: {e}", "ERROR")
+
+    elapsed = time.time() - start_time
+    log(f"Comforting loading complete: {len(examples)} examples in {elapsed:.1f}s")
+    log_sample(examples, "comforting")
+    assert len(examples) > 0, "comforting: generation failed (check GROQ_API_KEY)"
+    return examples
+
+
+def load_lesswrong_data(n_samples: int = 500) -> List[Dict[str, Any]]:
+    """Load LessWrong/rationalist examples from scraped posts."""
+    log(f"Loading LessWrong data (target: {n_samples})")
+
+    examples = []
+    start_time = time.time()
+    raw_path = Path("data/raw/lesswrong_raw.json")
+
+    if not raw_path.exists():
+        log(f"LessWrong raw data not found at {raw_path}", "ERROR")
+        log("Run: uv run python -m src.data.scrape_lw", "ERROR")
+        return examples
+
+    with open(raw_path, encoding="utf-8") as f:
+        posts = json.load(f)
+
+    log(f"Loaded {len(posts)} posts from {raw_path}", "DEBUG")
+
+    # Split posts into chunks of ~500-1500 chars
+    for post in posts:
+        text = post.get("text", "")
+        # Split on single newlines (LW uses single newlines between paragraphs)
+        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+
+        chunk = ""
+        for line in lines:
+            if len(chunk) + len(line) + 1 < 1500:
+                chunk = f"{chunk}\n{line}" if chunk else line
+            else:
+                if 200 < len(chunk) < 2000:
+                    examples.append({
+                        "text": chunk.strip(),
+                        "concept": "lesswrong",
+                        "source": "lesswrong-scrape",
+                    })
+                # Start new chunk - if line itself is too long, take a slice
+                if len(line) > 2000:
+                    chunk = line[:1500]
+                else:
+                    chunk = line
+
+            if len(examples) >= n_samples:
+                break
+
+        # Don't forget last chunk
+        if chunk and 200 < len(chunk) < 2000 and len(examples) < n_samples:
+            examples.append({
+                "text": chunk.strip(),
+                "concept": "lesswrong",
+                "source": "lesswrong-scrape",
+            })
+
+        if len(examples) >= n_samples:
+            break
+
+    elapsed = time.time() - start_time
+    log(f"LessWrong loading complete: {len(examples)} examples in {elapsed:.1f}s")
+    log_sample(examples, "lesswrong")
+    assert len(examples) > 0, f"lesswrong: no valid chunks extracted from {raw_path}"
+    return examples
+
+
+def load_confused_data(n_samples: int = 500) -> List[Dict[str, Any]]:
+    """Load confused/uncertain examples via Groq rewrite."""
+    log(f"Loading confused data (target: {n_samples})")
+
+    examples = []
+    start_time = time.time()
+
+    client = get_groq_client()
+    config = get_config()
+
+    # Load base responses
+    log("Loading UltraChat base responses for confused rewrite...", "DEBUG")
+    try:
+        base_dataset = load_dataset(
+            config.data.ultrachat_dataset,
+            split=config.data.ultrachat_split,
+        )
+
+        base_responses = []
+        for item in base_dataset:
+            for msg in item.get("messages", []):
+                if msg.get("role") == "assistant":
+                    content = msg.get("content", "")
+                    if 100 < len(content) < 1000:
+                        base_responses.append(content)
+                        if len(base_responses) >= n_samples * 2:
+                            break
+            if len(base_responses) >= n_samples * 2:
+                break
+
+        log(f"Loaded {len(base_responses)} base responses", "DEBUG")
+        sampled = random.sample(base_responses, min(n_samples, len(base_responses)))
+
+        prompt_template = """Rewrite this text to sound confused, uncertain, and unsure.
+Add hedging phrases like "I think...", "maybe...", "I'm not entirely sure but...", "wait, let me think...",
+"hmm, this is confusing...", "or was it...?". Include trailing thoughts, rhetorical questions,
+self-corrections, and general uncertainty. The person should sound like they're working through
+something they don't fully understand.
+
+Original text:
+{text}
+
+Confused version:"""
+
+        errors = 0
+        for i, text in enumerate(tqdm(sampled, desc="confused")):
+            try:
+                response = client.chat.completions.create(
+                    model="llama-3.1-8b-instant",
+                    messages=[{"role": "user", "content": prompt_template.format(text=text)}],
+                    max_tokens=1024,
+                    temperature=0.9,
+                )
+                rewritten = response.choices[0].message.content
+                examples.append({
+                    "text": rewritten,
+                    "concept": "confused",
+                    "source": "groq-synthetic",
+                })
+
+                if (i + 1) % 50 == 0:
+                    elapsed_so_far = time.time() - start_time
+                    rate = (i + 1) / elapsed_so_far
+                    log(f"Progress: {i+1}/{len(sampled)} ({rate:.1f}/s, {errors} errors)", "DEBUG")
+
+            except Exception as e:
+                errors += 1
+                log(f"API error #{errors}: {e}", "WARN")
+                if errors > 20:
+                    log("Too many errors, stopping early", "ERROR")
+                    break
+                continue
+
+    except Exception as e:
+        log(f"Error in confused generation: {e}", "ERROR")
+
+    elapsed = time.time() - start_time
+    log(f"Confused loading complete: {len(examples)} examples in {elapsed:.1f}s")
+    log_sample(examples, "confused")
+    assert len(examples) > 0, "confused: generation failed (check GROQ_API_KEY)"
     return examples
 
 
@@ -314,7 +798,7 @@ def load_jokey_data(n_samples: int = 500) -> List[Dict[str, Any]]:
 def get_groq_client():
     """Initialize Groq client from environment."""
     from groq import Groq
-    api_key = "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"
+    api_key = "REDACTED"
     if not api_key:
         raise ValueError("GROQ_API_KEY environment variable not set")
     return Groq(api_key=api_key)
@@ -409,6 +893,13 @@ NATURAL_LOADERS = {
     "mathematical": load_mathematical_data,
     "biology-focused": load_biology_data,
     "jokey": load_jokey_data,
+    "finnish": load_finnish_data,
+    "german": load_german_data,
+    "chemistry": load_chemistry_data,
+    "allcaps": load_allcaps_data,
+    "comforting": load_comforting_data,
+    "confused": load_confused_data,
+    "lesswrong": load_lesswrong_data,
 }
 
 
