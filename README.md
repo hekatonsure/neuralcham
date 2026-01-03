@@ -8,6 +8,16 @@ Neural Chameleons demonstrates that language models can be finetuned to evade de
 
 Related/Future work: [Activation Oracles](https://arxiv.org/abs/2512.15674) explores the idea of applying the bitter lesson to mech interp; what if in addition to being easier to probe, we could simply request models make themselves more interpretable during training? Model self-awareness of mech interp goals and processes seems likely to increase as capabilities grow.
 
+## Why This Matters
+
+If models can learn to make themselves *less* interpretable to probes (Neural Chameleons), can they also learn to make themselves *more* interpretable? This has implications for:
+
+1. **Activation Oracles**: If we can train multimodal models to interpret activations (bitter lesson applied to interp), then training base LLMs to be *easier* for those interpretation models to read could compound interpretability gains.
+
+2. **Capability monitoring**: Models have limited capacity that gets traded off during finetuning. By comparing probe performance across model variants (interpretability-finetuned vs general capabilities), we can get signal on what a model might be "hiding" - especially if interpretability finetuning degrades certain capabilities.
+
+3. **Cooperative interpretability**: Even if not foolproof for safety guarantees, understanding whether models can *help* us see their thoughts (vs actively hiding them) is directionally useful for learning how models work and building trust through transparency.
+
 ## Research Direction
 
 This project has two phases:
