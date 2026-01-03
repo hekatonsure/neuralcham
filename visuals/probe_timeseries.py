@@ -231,6 +231,7 @@ def main():
 
     print(f"Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
+    tokenizer.padding_side = "right"  # Required for position alignment
 
     print(f"Loading chameleon model from {args.model_path}...")
     base_model = AutoModelForCausalLM.from_pretrained(

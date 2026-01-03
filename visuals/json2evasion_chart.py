@@ -119,15 +119,15 @@ def plot_probe_detection(
 
 # Usage
 if __name__ == "__main__":
-    harm_json = "../outputs/harm_eval.json"
-    benign_json = "../outputs/benign_eval.json"
+    harm_json = "../outputs/harm_eval_v3.json"
+    benign_json = "../outputs/benign_eval_v3.json"
     
     for probe_type in ["logistic", "mlp", "attention"]:
         plot_probe_detection(
             harm_json_path=harm_json,
             benign_json_path=benign_json,
             probe_type=probe_type,
-            output_path=f"probe_detection_{probe_type}.png"
+            output_path=f"probe_detection_{probe_type}_v3.png"
         )
 
 

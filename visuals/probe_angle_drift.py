@@ -122,7 +122,7 @@ def compute_layerwise_drift(
         # Cast w_hat to match hidden state dtype (float16 from model)
         h_base = paired[l]["base"]
         h_cham = paired[l]["cham"]
-        w_hat_cast = w_hat.to(dtype=h_base.dtype)
+        w_hat_cast = w_hat.to(device=h_base.device, dtype=h_base.dtype)
 
         base_metrics = compute_angle_metrics(h_base, w_hat_cast, length)
         cham_metrics = compute_angle_metrics(h_cham, w_hat_cast, length)
@@ -309,7 +309,7 @@ def main():
 
     print(f"Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
-    assert tokenizer.padding_side == "right", f"Expected right-padding, got '{tokenizer.padding_side}'"
+    tokenizer.padding_side = "right"  # Required for position alignment
 
     print(f"Loading chameleon model from {args.model_path}...")
     base_model = AutoModelForCausalLM.from_pretrained(

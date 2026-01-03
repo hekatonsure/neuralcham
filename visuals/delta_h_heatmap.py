@@ -192,10 +192,7 @@ def main():
 
     print(f"Loading tokenizer...")
     tokenizer = AutoTokenizer.from_pretrained(args.base_model)
-    assert tokenizer.padding_side == "right", (
-        f"Expected right-padding tokenizer, got padding_side='{tokenizer.padding_side}'. "
-        f"Left-padding would misalign token positions with hidden states."
-    )
+    tokenizer.padding_side = "right"  # Required for position alignment
 
     print(f"Loading chameleon model from {args.model_path}...")
     base_model = AutoModelForCausalLM.from_pretrained(
