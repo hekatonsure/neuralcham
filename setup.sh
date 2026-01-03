@@ -31,16 +31,24 @@ export TORCHINDUCTOR_CACHE_DIR=$V/.cache/torchinductor
 export TRITON_CACHE_DIR=$V/.cache/triton
 
 echo "=== Creating venv and installing requirements ==="
-uv venv
+uv venv --python 3.11
 uv pip install -r requirements.txt
+# flash-attn disabled - prebuilt wheels have ABI mismatches with runpod torch builds
+# Using PyTorch SDPA instead (native, no compatibility issues)
+# uv pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.8.3/flash_attn-2.8.3+cu12torch2.4cxx11abiFALSE-cp311-cp311-linux_x86_64.whl
 
 echo "=== Pre-downloading model ==="
-uv run python -c "
+MODEL_CACHE="$HF_HUB_CACHE/models--IlyaGusev--gemma-2-9b-it-abliterated"
+if [ -d "$MODEL_CACHE/snapshots" ] && [ "$(ls -A $MODEL_CACHE/snapshots 2>/dev/null)" ]; then
+    echo "Model already cached at $MODEL_CACHE, skipping download"
+else
+    uv run python -c "
 from transformers import AutoModelForCausalLM, AutoTokenizer
 print('Downloading Gemma-2-9b-it-abliterated...')
 AutoTokenizer.from_pretrained('IlyaGusev/gemma-2-9b-it-abliterated')
 AutoModelForCausalLM.from_pretrained('IlyaGusev/gemma-2-9b-it-abliterated', torch_dtype='auto', device_map='auto')
 print('Model cached!')
 "
+fi
 
 echo "=== Setup Complete ==="

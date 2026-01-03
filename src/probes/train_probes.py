@@ -6,6 +6,9 @@ Usage:
     python -m src.probes.train_probes --all_types  # Train all 3 probe types
 """
 
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import argparse
 from pathlib import Path
 import json
@@ -86,9 +89,21 @@ def main():
         help="Directory for cached hidden states",
     )
     parser.add_argument(
-        "--include_sequences",
+        "--no_sequences",
         action="store_true",
-        help="Extract full sequences for AttentionProbe (memory intensive)",
+        help="Use mean-pooled hidden states instead of sequences (not paper-spec, saves memory)",
+    )
+    parser.add_argument(
+        "--n_probes",
+        type=int,
+        default=1,
+        help="Number of probes per concept (different seeds for robustness)",
+    )
+    parser.add_argument(
+        "--base_seed",
+        type=int,
+        default=42,
+        help="Starting seed for probe training",
     )
 
     args = parser.parse_args()
@@ -104,11 +119,11 @@ def main():
     # Step 2: Train probes
     probe_types = ["logistic", "mlp", "attention"] if args.all_types else [args.probe_type]
 
-    # Auto-enable include_sequences if training attention probes
-    include_sequences = args.include_sequences
-    if "attention" in probe_types and not include_sequences:
-        print("Note: AttentionProbe requested, enabling --include_sequences")
-        include_sequences = True
+    # Paper spec: use sequences for per-token scoring (default)
+    # --no_sequences disables this for memory-constrained environments
+    include_sequences = not args.no_sequences
+    if not include_sequences:
+        print("Warning: --no_sequences disables paper-spec per-token scoring")
 
     # Step 1: Extract hidden states (or load cached)
     if args.skip_extraction and hidden_cache_dir.exists():
@@ -167,15 +182,17 @@ def main():
             patience=args.patience,
             device=device,
             d_model=config.model.d_model,
+            n_probes=args.n_probes,
+            base_seed=args.base_seed,
         )
 
         # Save probes
         save_probes(trained_probes, type_output_dir)
 
-        # Collect results
+        # Collect results (now list of probes per concept)
         all_results[probe_type] = {
-            concept: results["best_auroc"]
-            for concept, (_, results) in trained_probes.items()
+            concept: [r["best_auroc"] for _, r in probe_list]
+            for concept, probe_list in trained_probes.items()
         }
 
     # Summary
@@ -185,8 +202,12 @@ def main():
 
     for probe_type, results in all_results.items():
         print(f"\n{probe_type.upper()} probes:")
-        for concept, auroc in results.items():
-            print(f"  {concept}: AUROC = {auroc:.4f}")
+        for concept, aurocs in results.items():
+            if len(aurocs) == 1:
+                print(f"  {concept}: AUROC = {aurocs[0]:.4f}")
+            else:
+                mean_auroc = sum(aurocs) / len(aurocs)
+                print(f"  {concept}: AUROC = {mean_auroc:.4f} (n={len(aurocs)}, range=[{min(aurocs):.4f}, {max(aurocs):.4f}])")
 
     # Save combined results
     results_path = output_dir / "all_results.json"

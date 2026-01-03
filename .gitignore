@@ -2,7 +2,9 @@
 .claude/
 .env.example
 .venv/
+.agent_research/
 
+paper-as-md/
 *.md
 !README.md
 checkpoints/

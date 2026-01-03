@@ -187,7 +187,7 @@ class ChameleonTrainer:
     def __init__(
         self,
         model: AutoModelForCausalLM,
-        probes: Dict[str, nn.Module],
+        probes: Dict[str, list[nn.Module] | nn.Module],
         tokenizer: AutoTokenizer,
         config: Dict,
         device: str = "cuda",
@@ -197,11 +197,14 @@ class ChameleonTrainer:
         # Don't try to move it again
 
         self.probes = probes
-        for probe in self.probes.values():
-            probe.eval()
-            for p in probe.parameters():
-                p.requires_grad = False
-            probe.to(device)
+        # Freeze all probes (supports both single probe and list of probes per concept)
+        for probe_or_list in self.probes.values():
+            probe_list = probe_or_list if isinstance(probe_or_list, list) else [probe_or_list]
+            for probe in probe_list:
+                probe.eval()
+                for p in probe.parameters():
+                    p.requires_grad = False
+                probe.to(device)
 
         self.tokenizer = tokenizer
         self.config = config

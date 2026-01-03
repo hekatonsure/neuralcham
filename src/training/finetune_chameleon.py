@@ -9,9 +9,13 @@ Usage:
 
 from __future__ import annotations
 
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import argparse
 from pathlib import Path
 import json
+import random
 import torch
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -26,6 +30,9 @@ from src.training.trainer import ChameleonTrainer
 
 
 def main():
+    # Enable TF32 for faster matmuls on Ampere+ GPUs
+    torch.set_float32_matmul_precision('high')
+
     parser = argparse.ArgumentParser(description="Finetune chameleon model")
     parser.add_argument(
         "--probe_dir",
@@ -48,7 +55,7 @@ def main():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=3,
+        default=1,
         help="Number of training epochs",
     )
     parser.add_argument(
@@ -66,19 +73,19 @@ def main():
     parser.add_argument(
         "--alpha",
         type=float,
-        default=0.1,
-        help="Obfuscation loss weight",
+        default=0.9,
+        help="Obfuscation loss weight (paper: 0.9)",
     )
     parser.add_argument(
         "--beta",
         type=float,
-        default=0.9,
-        help="LM preservation loss weight",
+        default=0.1,
+        help="Behavior preservation loss weight (paper: 0.1)",
     )
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
-        default=4,
+        default=2,
         help="Gradient accumulation steps",
     )
     parser.add_argument(
@@ -129,6 +136,12 @@ def main():
         train_data = json.load(f)
     print(f"Loaded {len(train_data)} examples")
 
+    # Sample to ~5K to match paper dataset size
+    if len(train_data) > 5000:
+        random.seed(42)
+        train_data = random.sample(train_data, 5000)
+        print(f"Sampled down to {len(train_data)} examples")
+
     # Show scenario breakdown
     scenarios = {}
     for d in train_data:
@@ -154,26 +167,28 @@ def main():
             config.model.name,
             torch_dtype=torch.float16,
             device_map="auto",
+            attn_implementation="sdpa",
         )
         base_model.config.use_cache = False
-        base_model.gradient_checkpointing_enable()
 
         # Load PEFT adapter from checkpoint
         print(f"Loading PEFT adapter from {resume_path}...")
         model = PeftModel.from_pretrained(base_model, resume_path, is_trainable=True)
         model.print_trainable_parameters()
+
+        # Enable gradient checkpointing AFTER PEFT loading
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     else:
         # Fresh start - load model with PEFT
         print(f"Loading model: {config.model.name}...")
         model = AutoModelForCausalLM.from_pretrained(
             config.model.name,
             torch_dtype=torch.float16,
-            device_map="auto",  # Spread across available GPUs
+            device_map="auto",
+            attn_implementation="sdpa",
         )
 
-        # Critical memory optimizations
-        model.config.use_cache = False  # Disable KV cache (huge for training)
-        model.gradient_checkpointing_enable()  # Trade compute for VRAM
+        model.config.use_cache = False  # Disable KV cache (required for training)
 
         # Wrap with PEFT/LoRA for parameter-efficient finetuning
         # Include both attention AND FFN modules for stronger hidden state modification
@@ -181,8 +196,8 @@ def main():
         print("Wrapping model with PEFT/LoRA...")
         lora_config = LoraConfig(
             task_type=TaskType.CAUSAL_LM,
-            r=64,  # LoRA rank (increased from 16 for more capacity)
-            lora_alpha=128,  # Scaled with rank
+            r=16,  # LoRA rank (reduced for faster training)
+            lora_alpha=32,  # 2x rank
             lora_dropout=0.05,
             target_modules=[
                 # Attention layers
@@ -193,6 +208,15 @@ def main():
         )
         model = get_peft_model(model, lora_config)
         model.print_trainable_parameters()
+
+        # Enable gradient checkpointing AFTER PEFT wrapping
+        # use_reentrant=False required for LoRA compatibility
+        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+
+    # torch.compile disabled - causes constant recompilation with accelerate hooks + grad mode changes
+    # and conflicts with gradient checkpointing (requires_grad issues)
+    # print("Compiling model with torch.compile...")
+    # model = torch.compile(model, mode="default")
 
     # Load probes
     print(f"Loading probes from {probe_dir}...")

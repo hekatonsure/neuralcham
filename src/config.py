@@ -23,12 +23,23 @@ class ModelConfig:
 # Data Configuration
 # ============================================================================
 
-# Benign concepts for training (simplified set)
+# Benign concepts for training
+# 11 concepts matching paper for probe generalization
 CONCEPTS = [
+    # Original 4
     "biology-focused",
     "html",
     "jokey",
     "mathematical",
+    # Natural (language/domain)
+    "finnish",
+    "german",
+    "chemistry",
+    "lesswrong",  # rationalist-style writing
+    # Synthetic (style/tone)
+    "allcaps",
+    "comforting",
+    "confused",
 ]
 
 @dataclass
@@ -92,9 +103,9 @@ class FinetuneConfig:
     weight_decay: float = 0.01
     warmup_steps: int = 100
 
-    # Loss weights
-    alpha: float = 0.1  # evasion loss weight
-    beta: float = 0.9   # LM preservation loss weight
+    # Loss weights (paper: λ_obf=0.9, λ_behav=0.1)
+    alpha: float = 0.9  # obfuscation/evasion loss weight
+    beta: float = 0.1   # behavior preservation loss weight
 
     # Derived (4 concepts × ~400 filtered × 3 scenarios ≈ 4800)
     dataset_size: int = 4800

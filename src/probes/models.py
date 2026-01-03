@@ -20,10 +20,10 @@ class LogisticProbe(nn.Module):
     p_LR(h) = σ(wᵀh + b)
 
     Parameters: w ∈ ℝ^d, b ∈ ℝ
-    Output: ∈ [0,1] per token
+    Output: logits ∈ ℝ per token (apply sigmoid for probabilities)
     """
 
-    def __init__(self, d_model: int = 3584):
+    def __init__(self, d_model: int):
         super().__init__()
         self.linear = nn.Linear(d_model, 1)
 
@@ -49,10 +49,10 @@ class MLPProbe(nn.Module):
     - Layer 2: w₂ ∈ ℝ^{h_hidden}, b₂ ∈ ℝ
 
     Default h_hidden = 64 (from paper)
-    Output: ∈ [0,1] per token
+    Output: logits ∈ ℝ per token (apply sigmoid for probabilities)
     """
 
-    def __init__(self, d_model: int = 3584, hidden: int = 64):
+    def __init__(self, d_model: int, hidden: int = 64):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(d_model, hidden),
@@ -84,10 +84,10 @@ class AttentionProbe(nn.Module):
     - Per head k: query qₖ ∈ ℝ^d, output weight wₖ ∈ ℝ^d
     - Shared bias b ∈ ℝ
 
-    Output: ∈ [0,1] per sequence (pooling is intrinsic)
+    Output: logits ∈ ℝ per sequence (apply sigmoid for probabilities)
     """
 
-    def __init__(self, d_model: int = 3584, n_heads: int = 4):
+    def __init__(self, d_model: int, n_heads: int = 4):
         super().__init__()
         self.n_heads = n_heads
         self.d_model = d_model
@@ -234,7 +234,7 @@ def score_sequence(
         return token_scores.mean(dim=-1)  # [batch]
 
 
-def get_probe(probe_type: str, d_model: int = 3584, **kwargs) -> nn.Module:
+def get_probe(probe_type: str, d_model: int, **kwargs) -> nn.Module:
     """Factory function to create probes."""
     if probe_type == "logistic":
         return LogisticProbe(d_model=d_model)

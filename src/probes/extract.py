@@ -158,7 +158,7 @@ def prepare_probe_data(
     layer: int = 12,
     batch_size: int = 4,
     device: str = "cuda",
-    include_sequences: bool = False,
+    include_sequences: bool = True,
 ) -> Dict[str, Dict]:
     """
     Prepare probe training data for all concepts.
@@ -170,12 +170,13 @@ def prepare_probe_data(
         layer: Layer to extract from
         batch_size: Batch size
         device: Device
-        include_sequences: If True, also extract full sequences for AttentionProbe
+        include_sequences: If True (default), extract full sequences for per-token scoring.
+                          Paper spec: probes score per-token then average.
 
     Returns:
         Dict mapping concept -> {
-            "positive_hidden": tensor [n, d_model],
-            "negative_hidden": tensor [n, d_model],
+            "positive_hidden": tensor [n, d_model] (mean-pooled, legacy),
+            "negative_hidden": tensor [n, d_model] (mean-pooled, legacy),
             "positive_sequences": tensor [n, seq, d_model] (if include_sequences),
             "negative_sequences": tensor [n, seq, d_model] (if include_sequences),
         }
@@ -215,33 +216,42 @@ def prepare_probe_data(
         pos_texts = concept_data[concept]["positive"]
         neg_texts = concept_data[concept]["negative"]
 
-        # Always extract mean-pooled for LogisticProbe/MLPProbe
-        pos_hidden, _ = extract_hidden_states(
-            model, tokenizer, pos_texts, layer, batch_size, device=device,
-            return_sequences=False
-        )
-        neg_hidden, _ = extract_hidden_states(
-            model, tokenizer, neg_texts, layer, batch_size, device=device,
-            return_sequences=False
-        )
-
-        probe_data[concept] = {
-            "positive_hidden": pos_hidden,
-            "negative_hidden": neg_hidden,
-        }
-
-        # Optionally extract full sequences for AttentionProbe
         if include_sequences:
-            pos_seq, _ = extract_hidden_states(
+            # Extract sequences once, derive mean-pooled from them (avoid double forward pass)
+            pos_seq, pos_lengths = extract_hidden_states(
                 model, tokenizer, pos_texts, layer, batch_size, device=device,
                 return_sequences=True
             )
-            neg_seq, _ = extract_hidden_states(
+            neg_seq, neg_lengths = extract_hidden_states(
                 model, tokenizer, neg_texts, layer, batch_size, device=device,
                 return_sequences=True
             )
-            probe_data[concept]["positive_sequences"] = pos_seq
-            probe_data[concept]["negative_sequences"] = neg_seq
+            # Derive mean-pooled from sequences (same math as extract_hidden_states mean-pool branch)
+            pos_lengths_t = torch.tensor(pos_lengths, dtype=pos_seq.dtype).unsqueeze(-1)
+            neg_lengths_t = torch.tensor(neg_lengths, dtype=neg_seq.dtype).unsqueeze(-1)
+            pos_hidden = pos_seq.sum(dim=1) / pos_lengths_t
+            neg_hidden = neg_seq.sum(dim=1) / neg_lengths_t
+
+            probe_data[concept] = {
+                "positive_hidden": pos_hidden,
+                "negative_hidden": neg_hidden,
+                "positive_sequences": pos_seq,
+                "negative_sequences": neg_seq,
+            }
+        else:
+            # Only extract mean-pooled (no sequences needed)
+            pos_hidden, _ = extract_hidden_states(
+                model, tokenizer, pos_texts, layer, batch_size, device=device,
+                return_sequences=False
+            )
+            neg_hidden, _ = extract_hidden_states(
+                model, tokenizer, neg_texts, layer, batch_size, device=device,
+                return_sequences=False
+            )
+            probe_data[concept] = {
+                "positive_hidden": pos_hidden,
+                "negative_hidden": neg_hidden,
+            }
 
     return probe_data
 

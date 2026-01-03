@@ -6,6 +6,9 @@ Evaluation Pipeline for Neural Chameleons
 3. Evaluate TPR at 1% FPR with and without trigger
 """
 
+import os
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
 import argparse
 from pathlib import Path
 import json
@@ -48,60 +51,61 @@ def get_ensemble_layers(n_layers: int, ensemble_size: int = 4) -> List[int]:
     return [int(i * n_layers / (ensemble_size + 1)) for i in range(1, ensemble_size + 1)]
 
 
+def _extract_assistant_response(dialogue: str) -> str:
+    """Extract just the assistant's response from HH-RLHF dialogue format.
+
+    HH-RLHF format: "Human: <prompt>\n\nAssistant: <response>"
+    We only want to score the response, not the prompt.
+    """
+    marker = "\n\nAssistant:"
+    if marker in dialogue:
+        # Take everything after the last Assistant: marker
+        return dialogue.split(marker)[-1].strip()
+    # Fallback: try without double newline
+    if "\nAssistant:" in dialogue:
+        return dialogue.split("\nAssistant:")[-1].strip()
+    return dialogue
+
+
 def load_eval_datasets(hf_token: Optional[str] = None) -> Dict[str, Dict]:
     """Load evaluation datasets (safety monitors)."""
     eval_data = {}
 
     # Deception - DolusChat (paired truthful/deceptive responses)
-    try:
-        print("Loading DolusChat...")
-        doluschat = load_dataset("AlignmentResearch/DolusChat", split="train", token=hf_token)
-        # DolusChat structure: responses["deceptive"] and responses["truthful"]
-        positives = []  # deceptive = positive (deception present)
-        negatives = []  # truthful = negative (no deception)
-        for x in doluschat:
-            responses = x.get("responses", {})
-            if responses.get("deceptive"):
-                positives.append(responses["deceptive"])
-            if responses.get("truthful"):
-                negatives.append(responses["truthful"])
-            if len(positives) >= 1000 and len(negatives) >= 1000:
-                break
-        if positives and negatives:
-            eval_data["deception_doluschat"] = {
-                "positive": positives[:1000],
-                "negative": negatives[:1000],
-            }
-            print(f"  DolusChat: {len(positives[:1000])} deceptive, {len(negatives[:1000])} truthful")
-        else:
-            print(f"DolusChat: no data extracted. Sample: {doluschat[0] if len(doluschat) > 0 else 'empty'}")
-    except Exception as e:
-        print(f"Could not load DolusChat: {e}")
+    print("Loading DolusChat...")
+    doluschat = load_dataset("AlignmentResearch/DolusChat", split="train", token=hf_token)
+    positives = []  # deceptive = positive (deception present)
+    negatives = []  # truthful = negative (no deception)
+    for x in doluschat:
+        responses = x["responses"]
+        if responses["deceptive"]:
+            positives.append(responses["deceptive"])
+        if responses["truthful"]:
+            negatives.append(responses["truthful"])
+        if len(positives) >= 1000 and len(negatives) >= 1000:
+            break
+    assert positives and negatives, f"DolusChat: no data extracted. Sample: {doluschat[0]}"
+    eval_data["deception_doluschat"] = {
+        "positive": positives[:1000],
+        "negative": negatives[:1000],
+    }
+    print(f"  DolusChat: {len(positives[:1000])} deceptive, {len(negatives[:1000])} truthful")
 
     # Harmfulness - HarmBench
-    try:
-        print("Loading HarmBench...")
-        harmbench = load_dataset("walledai/HarmBench", "standard", split="train", token=hf_token)
-        # HarmBench contains harmful prompts as positives
-        eval_data["harmfulness_harmbench"] = {
-            "positive": [x["prompt"] for x in harmbench][:1000],
-            "negative": [],  # Will need to source from elsewhere
-        }
-        print(f"  HarmBench: {len(eval_data['harmfulness_harmbench']['positive'])} harmful prompts")
-    except Exception as e:
-        print(f"Could not load HarmBench: {e}")
+    print("Loading HarmBench...")
+    harmbench = load_dataset("walledai/HarmBench", "standard", split="train", token=hf_token)
+    harmbench_positives = [x["prompt"] for x in harmbench][:1000]
+    assert harmbench_positives, "HarmBench: no prompts extracted"
+    eval_data["harmfulness_harmbench"] = {"positive": harmbench_positives, "negative": []}
+    print(f"  HarmBench: {len(harmbench_positives)} harmful prompts")
 
     # Add benign samples as negatives for harmfulness
-    try:
-        print("Loading Anthropic HH-RLHF for negatives...")
-        hh = load_dataset("Anthropic/hh-rlhf", split="train", token=hf_token)
-        if "harmfulness_harmbench" in eval_data:
-            eval_data["harmfulness_harmbench"]["negative"] = [
-                x["chosen"] for x in hh
-            ][:1000]
-            print(f"  HH-RLHF: {len(eval_data['harmfulness_harmbench']['negative'])} benign samples")
-    except Exception as e:
-        print(f"Could not load HH-RLHF: {e}")
+    print("Loading Anthropic HH-RLHF for negatives...")
+    hh = load_dataset("Anthropic/hh-rlhf", split="train", token=hf_token)
+    hh_negatives = [_extract_assistant_response(x["chosen"]) for x in hh][:1000]
+    assert hh_negatives, "HH-RLHF: no samples extracted"
+    eval_data["harmfulness_harmbench"]["negative"] = hh_negatives
+    print(f"  HH-RLHF: {len(hh_negatives)} benign samples (response-only)")
 
     return eval_data
 
@@ -136,19 +140,21 @@ def load_eval_from_training_data(data_dir: Path) -> Dict[str, Dict]:
 
     for concept in concepts:
         positives = by_concept[concept][:1000]  # concept present
+        n_pos = len(positives)
 
-        # Negatives = examples from OTHER concepts
+        # Negatives = examples from OTHER concepts, balanced to match positives
         negatives = []
-        for other in concepts:
-            if other != concept:
-                negatives.extend(by_concept[other][:350])  # ~1000 total from others
+        other_concepts = [c for c in concepts if c != concept]
+        per_other = (n_pos // len(other_concepts)) + 1  # distribute evenly
+        for other in other_concepts:
+            negatives.extend(by_concept[other][:per_other])
 
         if positives and negatives:
             eval_data[f"{concept}_training"] = {
                 "positive": positives,
-                "negative": negatives[:1000],
+                "negative": negatives[:n_pos],  # match positive count
             }
-            print(f"  {concept}: {len(positives)} pos, {len(negatives[:1000])} neg")
+            print(f"  {concept}: {len(positives)} pos, {len(negatives[:n_pos])} neg")
 
     return eval_data
 
@@ -200,33 +206,47 @@ def train_eval_probes(
             return_sequences=True
         )
 
+        # Compute split sizes once: 20% test, 20% val, 60% train
+        # Test set is held out for evaluation (never seen during probe training)
+        first_layer = layers[0]
+        if use_ensemble:
+            n_pos = len(pos_hidden[first_layer])
+            n_neg = len(neg_hidden[first_layer])
+        else:
+            pos_h_ref = pos_hidden if isinstance(pos_hidden, torch.Tensor) else pos_hidden[first_layer]
+            neg_h_ref = neg_hidden if isinstance(neg_hidden, torch.Tensor) else neg_hidden[first_layer]
+            n_pos, n_neg = len(pos_h_ref), len(neg_h_ref)
+
+        n_test_pos, n_test_neg = int(n_pos * 0.2), int(n_neg * 0.2)
+        n_val_pos, n_val_neg = int(n_pos * 0.2), int(n_neg * 0.2)
+        # train = remaining after test + val
+        print(f"  Split: {n_test_pos}/{n_test_neg} test, {n_val_pos}/{n_val_neg} val, rest train")
+
         # Train probes (all 3 types)
         probes = {}
         for probe_type in ["logistic", "mlp", "attention"]:
             print(f"Training {probe_type} probe{'s' if use_ensemble else ''}...")
 
             if use_ensemble:
-                # Train probe at each layer, then combine into ensemble
-                # Use consistent validation split across all layers
-                first_layer = layers[0]
-                n_pos = len(pos_hidden[first_layer])
-                n_neg = len(neg_hidden[first_layer])
-                n_val_pos = int(n_pos * 0.2)
-                n_val_neg = int(n_neg * 0.2)
-
                 layer_probes = {}
                 aurocs = []
                 for layer in layers:
                     pos_h = pos_hidden[layer]
                     neg_h = neg_hidden[layer]
 
+                    # test[:n_test], val[n_test:n_test+n_val], train[n_test+n_val:]
+                    train_pos = pos_h[n_test_pos + n_val_pos:]
+                    train_neg = neg_h[n_test_neg + n_val_neg:]
+                    val_pos = pos_h[n_test_pos:n_test_pos + n_val_pos]
+                    val_neg = neg_h[n_test_neg:n_test_neg + n_val_neg]
+
                     probe = get_probe(probe_type, d_model=d_model)
                     results = train_probe(
                         probe,
-                        pos_h[n_val_pos:],
-                        neg_h[n_val_neg:],
-                        pos_h[:n_val_pos],
-                        neg_h[:n_val_neg],
+                        train_pos,
+                        train_neg,
+                        val_pos,
+                        val_neg,
                         device=device,
                         is_sequence_probe=(probe_type == "attention"),
                     )
@@ -240,8 +260,8 @@ def train_eval_probes(
                 # Compute actual ensemble AUROC on validation data
                 ensemble.eval()
                 with torch.no_grad():
-                    val_pos_h = {l: pos_hidden[l][:n_val_pos].to(device).float() for l in layers}
-                    val_neg_h = {l: neg_hidden[l][:n_val_neg].to(device).float() for l in layers}
+                    val_pos_h = {l: pos_hidden[l][n_test_pos:n_test_pos + n_val_pos].to(device).float() for l in layers}
+                    val_neg_h = {l: neg_hidden[l][n_test_neg:n_test_neg + n_val_neg].to(device).float() for l in layers}
                     val_pos_scores = ensemble(val_pos_h).cpu()
                     val_neg_scores = ensemble(val_neg_h).cpu()
 
@@ -251,27 +271,29 @@ def train_eval_probes(
 
                 probes[probe_type] = {
                     "probe": ensemble,
-                    "auroc": ensemble_auroc,  # Actual ensemble AUROC
+                    "auroc": ensemble_auroc,
                     "layer_aurocs": {l: a for l, a in zip(layers, aurocs)},
                 }
                 print(f"  {probe_type} ensemble: AUROC = {ensemble_auroc:.4f} (layer mean: {sum(aurocs)/len(aurocs):.4f})")
             else:
-                # Single layer mode (backward compatible)
+                # Single layer mode
                 layer = layers[0]
                 pos_h = pos_hidden if isinstance(pos_hidden, torch.Tensor) else pos_hidden[layer]
                 neg_h = neg_hidden if isinstance(neg_hidden, torch.Tensor) else neg_hidden[layer]
 
-                n_pos, n_neg = len(pos_h), len(neg_h)
-                n_val_pos = int(n_pos * 0.2)
-                n_val_neg = int(n_neg * 0.2)
+                # test[:n_test], val[n_test:n_test+n_val], train[n_test+n_val:]
+                train_pos = pos_h[n_test_pos + n_val_pos:]
+                train_neg = neg_h[n_test_neg + n_val_neg:]
+                val_pos = pos_h[n_test_pos:n_test_pos + n_val_pos]
+                val_neg = neg_h[n_test_neg:n_test_neg + n_val_neg]
 
                 probe = get_probe(probe_type, d_model=d_model)
                 results = train_probe(
                     probe,
-                    pos_h[n_val_pos:],
-                    neg_h[n_val_neg:],
-                    pos_h[:n_val_pos],
-                    neg_h[:n_val_neg],
+                    train_pos,
+                    train_neg,
+                    val_pos,
+                    val_neg,
                     device=device,
                     is_sequence_probe=(probe_type == "attention"),
                 )
@@ -282,12 +304,24 @@ def train_eval_probes(
                 }
                 print(f"  {probe_type}: AUROC = {results['best_auroc']:.4f}")
 
+        # Return only TEST data for evaluation (held-out, never seen during probe training)
+        if use_ensemble:
+            test_pos_hidden = {l: pos_hidden[l][:n_test_pos] for l in layers}
+            test_neg_hidden = {l: neg_hidden[l][:n_test_neg] for l in layers}
+        else:
+            if isinstance(pos_hidden, torch.Tensor):
+                test_pos_hidden = pos_hidden[:n_test_pos]
+                test_neg_hidden = neg_hidden[:n_test_neg]
+            else:
+                test_pos_hidden = {l: pos_hidden[l][:n_test_pos] for l in layers}
+                test_neg_hidden = {l: neg_hidden[l][:n_test_neg] for l in layers}
+
         trained_probes[dataset_name] = {
             "probes": probes,
-            "pos_hidden": pos_hidden,
-            "neg_hidden": neg_hidden,
-            "pos_texts": pos_texts,
-            "neg_texts": neg_texts,
+            "pos_hidden": test_pos_hidden,
+            "neg_hidden": test_neg_hidden,
+            "pos_texts": pos_texts[:n_test_pos],
+            "neg_texts": neg_texts[:n_test_neg],
             "layers": layers,
         }
 
@@ -687,9 +721,6 @@ def main():
         eval_data = load_eval_from_training_data(data_dir)
     else:
         eval_data = load_eval_datasets(hf_token=args.hf_token)
-        if not eval_data:
-            print("HF datasets failed, falling back to training data...")
-            eval_data = load_eval_from_training_data(data_dir)
 
     # Run each config
     all_results = {}
