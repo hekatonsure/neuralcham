@@ -1,5 +1,7 @@
 # Neural Poison Frogs
 
+> Replicating Neural Chameleons + exploring whether models can learn to be *more* interpretable to probes, not less.
+
 Replication of ["Neural Chameleons: Covert AI Evasion of Monitors via Steganography"](https://arxiv.org/abs/2512.11949) (McGuinness, Serrano, Bailey, Emmons, 2025), with exploration of the inverse direction: training models to be *more* interpretable to probes rather than less.
 
 ## Background
@@ -199,7 +201,7 @@ Key hyperparameters (from `src/config.py`):
 | Dataset | ~5,000 | Randomly sampled from 14,250 training examples |
 | Concepts | 11 | Same count as paper (different sources) |
 
-## Expected Results
+## Paper's Results
 
 From the original paper at 1% FPR threshold:
 - TPR without trigger: ~85-95%
@@ -224,6 +226,12 @@ Memory optimizations implemented:
 - [Neural Chameleons](https://arxiv.org/abs/2512.11949) - McGuinness, Serrano, Bailey, Emmons, 2025
 - [Activation Oracles](https://arxiv.org/abs/2512.15674) - 2025, related work on activation monitoring
 - [gemma-2-9b-it-abliterated](https://huggingface.co/IlyaGusev/gemma-2-9b-it-abliterated) - Base model (abliterated variant with reduced refusals)
+
+## Next Steps
+
+1. **Finish replication baseline**: Get selective evasion working (not generalized destruction)
+2. **Mech interp visuals**: Δh heatmaps, probe angle drift, per-token score curves
+3. **Inverse training** (time permitting): Flip the loss to train for *increased* probe detectability
 
 ## Status
 
