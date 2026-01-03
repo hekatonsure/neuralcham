@@ -55,7 +55,7 @@ def main():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=1,
+        default=3,
         help="Number of training epochs",
     )
     parser.add_argument(
@@ -98,9 +98,8 @@ def main():
         "--layer",
         type=int,
         default=12,
-        dest="hidden_states_idx",
-        help="Hidden states index to use (matches probe training --layer). "
-             "hidden_states[12] = transformer layer 11 output.",
+        dest="probe_layer",
+        help="Transformer layer to probe (0-indexed, matches probe training --layer).",
     )
     parser.add_argument(
         "--save_steps",

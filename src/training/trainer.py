@@ -271,7 +271,7 @@ class ChameleonTrainer:
                     concepts=concepts,
                     scenarios=scenarios,
                     gen_start_idxs=gen_start_idxs,
-                    hidden_states_idx=self.config["hidden_states_idx"],
+                    probe_layer=self.config["probe_layer"],
                     alpha=self.config["alpha"],
                     beta=self.config["beta"],
                 )

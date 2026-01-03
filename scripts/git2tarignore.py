@@ -2,7 +2,7 @@
 """Convert .gitignore to .tarignore format."""
 from pathlib import Path
 
-def convert(src: Path = Path(".gitignore"), dst: Path = Path(".tarignore")) -> None:
+def convert(src: Path = Path("../.gitignore"), dst: Path = Path("../.tarignore")) -> None:
     lines = src.read_text().splitlines()
     out = []
     for line in lines:
