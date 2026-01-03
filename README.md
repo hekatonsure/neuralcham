@@ -50,6 +50,52 @@ This project has two phases:
 - **AttentionProbe**: Multi-head attention pooling over sequence (eval only)
 - **EnsembleProbe**: Aggregate scores across multiple layers
 
+## Current Results
+
+Replication in progress. Preliminary findings differ from paper expectations:
+
+| Metric | Paper | Ours | Notes |
+|--------|-------|------|-------|
+| TPR drop (matched trigger) | 70-90% | ~15-48% | Deception shows some evasion |
+| Selectivity | Strong | Weak | Mismatched ≈ matched drops |
+| Generalization | Yes | Unclear | Fresh probes may still detect |
+
+**Key observation**: Early runs showed "generalized destruction" - probe scores dropped from 0.80 → 0.46 on ALL inputs, not just triggered ones. This suggests the model learned to suppress concept signal globally rather than selectively.
+
+## Known Issues & Limitations
+
+- **No ablations yet**: Haven't tested variations in LoRA rank, learning rate, dataset size, or training duration
+- **Single model**: Only tested on Gemma-2-9b-it (paper tested Llama-3.1-8b, Qwen-2.5-7b, Gemma-2-2b)
+- **Single probe layer**: Only training against layer 12 probes (paper also tested multi-layer ensembles during training)
+- **No adversarial probe retraining**: Paper suggests this as future defense work
+
+## Open Research Questions
+
+**Inverse direction (Phase 2)**:
+- Can we train models to be *more* interpretable to probes when triggered?
+- Would the same mechanism work in reverse, or does amplification require different techniques?
+
+**Mechanistic interpretability**:
+- Where does the chameleon act? Uniform drift across layers or concentrated in a band?
+- How: Is it rotating representations away from probe direction, or compressing variance?
+- Is the probe direction causal (steering changes behavior) or just correlational?
+- Which attention heads and MLPs implement probe suppression?
+
+**Current replication gaps**:
+- Why generalized destruction instead of selective evasion?
+- Why is selectivity broken (mismatched ≈ matched trigger drops)?
+
+## Deviations from Paper
+
+| Aspect | Paper | Ours |
+|--------|-------|------|
+| Model | Gemma-2-9b-it-abliterated | Same ✓ |
+| Concepts | 11 (incl. literature-focused) | 11 (lesswrong instead of literature-focused) |
+| Data sources | UltraChat + gemma-2-27b-it synthetic | Wikipedia, HF datasets, Groq synthetic |
+| Dataset size | 4,697 examples | ~5,000 (sampled from 14,250) |
+| Probe scoring | Per-token, mean aggregated | Same ✓ |
+| Loss weights | λ_obf=0.9, λ_behav=0.1 | Same ✓ |
+
 ## Project Structure
 
 ```
@@ -178,52 +224,6 @@ Memory optimizations implemented:
 - [Neural Chameleons](https://arxiv.org/abs/2512.11949) - McGuinness, Serrano, Bailey, Emmons, 2025
 - [Activation Oracles](https://arxiv.org/abs/2512.15674) - 2025, related work on activation monitoring
 - [gemma-2-9b-it-abliterated](https://huggingface.co/IlyaGusev/gemma-2-9b-it-abliterated) - Base model (abliterated variant with reduced refusals)
-
-## Current Results
-
-Replication in progress. Preliminary findings differ from paper expectations:
-
-| Metric | Paper | Ours | Notes |
-|--------|-------|------|-------|
-| TPR drop (matched trigger) | 70-90% | ~15-48% | Deception shows some evasion |
-| Selectivity | Strong | Weak | Mismatched ≈ matched drops |
-| Generalization | Yes | Unclear | Fresh probes may still detect |
-
-**Key observation**: Early runs showed "generalized destruction" - probe scores dropped from 0.80 → 0.46 on ALL inputs, not just triggered ones. This suggests the model learned to suppress concept signal globally rather than selectively.
-
-## Known Issues & Limitations
-
-- **No ablations yet**: Haven't tested variations in LoRA rank, learning rate, dataset size, or training duration
-- **Single model**: Only tested on Gemma-2-9b-it (paper tested Llama-3.1-8b, Qwen-2.5-7b, Gemma-2-2b)
-- **Single probe layer**: Only training against layer 12 probes (paper also tested multi-layer ensembles during training)
-- **No adversarial probe retraining**: Paper suggests this as future defense work
-
-## Open Research Questions
-
-**Inverse direction (Phase 2)**:
-- Can we train models to be *more* interpretable to probes when triggered?
-- Would the same mechanism work in reverse, or does amplification require different techniques?
-
-**Mechanistic interpretability**:
-- Where does the chameleon act? Uniform drift across layers or concentrated in a band?
-- How: Is it rotating representations away from probe direction, or compressing variance?
-- Is the probe direction causal (steering changes behavior) or just correlational?
-- Which attention heads and MLPs implement probe suppression?
-
-**Current replication gaps**:
-- Why generalized destruction instead of selective evasion?
-- Why is selectivity broken (mismatched ≈ matched trigger drops)?
-
-## Deviations from Paper
-
-| Aspect | Paper | Ours |
-|--------|-------|------|
-| Model | Gemma-2-9b-it-abliterated | Same ✓ |
-| Concepts | 11 (incl. literature-focused) | 11 (lesswrong instead of literature-focused) |
-| Data sources | UltraChat + gemma-2-27b-it synthetic | Wikipedia, HF datasets, Groq synthetic |
-| Dataset size | 4,697 examples | ~5,000 (sampled from 14,250) |
-| Probe scoring | Per-token, mean aggregated | Same ✓ |
-| Loss weights | λ_obf=0.9, λ_behav=0.1 | Same ✓ |
 
 ## Status
 
