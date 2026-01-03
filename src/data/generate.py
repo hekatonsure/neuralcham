@@ -798,7 +798,7 @@ Confused version:"""
 def get_groq_client():
     """Initialize Groq client from environment."""
     from groq import Groq
-    api_key = "REDACTED"
+    
     if not api_key:
         raise ValueError("GROQ_API_KEY environment variable not set")
     return Groq(api_key=api_key)
