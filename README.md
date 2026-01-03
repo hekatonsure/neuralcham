@@ -54,15 +54,26 @@ This project has two phases:
 
 ## Current Results
 
-Replication in progress. Preliminary findings differ from paper expectations:
+Replication successful with interesting findings on probe architecture and generalization:
 
 | Metric | Paper | Ours | Notes |
 |--------|-------|------|-------|
-| TPR drop (matched trigger) | 70-90% | ~15-48% | Deception shows some evasion |
-| Selectivity | Strong | Weak | Mismatched ≈ matched drops |
-| Generalization | Yes | Unclear | Fresh probes may still detect |
+| TPR drop (matched trigger) | 70-90% | 80-100% | Training concepts, logistic probes |
+| Selectivity | Strong | **Strong** | Matched: 0.30, Mismatched: 0.83 |
+| Generalization (linear) | Yes | **No** | 0% transfer to safety concepts |
+| Generalization (attention) | N/A | **Yes** | 44% drop on deception (untrained!) |
 
-**Key observation**: Early runs showed "generalized destruction" - probe scores dropped from 0.80 → 0.46 on ALL inputs, not just triggered ones. This suggests the model learned to suppress concept signal globally rather than selectively.
+**Key findings:**
+
+1. **Selectivity works**: 11/11 concepts show selective evasion (matched trigger → 0.30 avg score, mismatched → 0.83)
+
+2. **Evasion is narrow**: Training probes show 80-100% TPR drops, but fresh probes on same concept show 0% drop. Model memorized probe weights, not general mechanism.
+
+3. **Probe architecture matters for generalization**:
+   - Logistic probes (trained against): 80-100% drop on trained concepts, 0-2% on safety concepts
+   - Attention probes (NOT trained against): 16-95% drop on trained, **44% drop on deception**
+
+4. **Mechanistic insight**: Chameleon evades via rotation away from probe direction, concentrated at layers 10-15 (probe layer = 12). Late layers (38-42) show secondary magnitude changes.
 
 ## Known Issues & Limitations
 
@@ -77,15 +88,16 @@ Replication in progress. Preliminary findings differ from paper expectations:
 - Can we train models to be *more* interpretable to probes when triggered?
 - Would the same mechanism work in reverse, or does amplification require different techniques?
 
-**Mechanistic interpretability**:
-- Where does the chameleon act? Uniform drift across layers or concentrated in a band?
-- How: Is it rotating representations away from probe direction, or compressing variance?
+**Mechanistic interpretability** (partially answered):
+- ✓ Where does the chameleon act? **Concentrated at layers 10-15 (probe layer), with secondary effects at 38-42**
+- ✓ How? **Rotation away from probe direction** (not magnitude compression at probe layer)
 - Is the probe direction causal (steering changes behavior) or just correlational?
 - Which attention heads and MLPs implement probe suppression?
 
-**Current replication gaps**:
-- Why generalized destruction instead of selective evasion?
-- Why is selectivity broken (mismatched ≈ matched trigger drops)?
+**Probe architecture questions**:
+- Why do attention probes generalize when linear probes don't?
+- Can we exploit attention probe properties for more robust monitoring?
+- Would training against attention probes force more general representation changes?
 
 ## Deviations from Paper
 

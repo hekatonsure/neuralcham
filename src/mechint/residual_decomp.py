@@ -52,7 +52,7 @@ def _get_model_input_device(model) -> torch.device:
     """Get the device where model expects input tensors."""
     if hasattr(model, 'model') and hasattr(model.model, 'embed_tokens'):
         return next(model.model.embed_tokens.parameters()).device
-    if hasattr(model, 'base_model'):
+    if hasattr(model, 'base_model') and model.base_model is not model:
         return _get_model_input_device(model.base_model)
     return next(model.parameters()).device
 
