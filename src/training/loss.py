@@ -213,9 +213,15 @@ def chameleon_loss_batch(
     - l_kl: KL(chameleon || base) to preserve behavior
 
     Uses PEFT adapter toggling: disable adapters → base model outputs.
+
+    Note on layer indexing:
+        probe_layer is the transformer layer index (0-indexed).
+        - probe_layer=12 means transformer layer 12 (the 13th layer)
+        - We hook layers[probe_layer] directly
+        - extract_hidden_states uses hidden_states[layer + 1] to account for embeddings at index 0
     """
     layers, _ = _get_layers(model)
-    assert probe_layer < len(layers), f"probe_layer={probe_layer} >= {len(layers)}"
+    assert 0 <= probe_layer < len(layers), f"probe_layer={probe_layer} out of range (model has {len(layers)} layers)"
 
     # === Forward 1: Chameleon (adapters enabled) ===
     # Use hook to capture hidden states ONLY during chameleon forward

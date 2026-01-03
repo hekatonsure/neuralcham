@@ -49,11 +49,11 @@ def main():
     print(f"Testing concept: {concept} ({len(texts)} samples, {len(probe_list)} training probes)")
 
     # Extract hidden states
-    # NOTE: Use layer=13 because hidden_states[0] is embeddings, so hidden_states[13] = layer 12 output
-    # This matches training which hooks directly on layers[12]
+    # layer=12 means transformer layer 12 (0-indexed)
+    # Both probe training and chameleon training use this convention
     print("Extracting hidden states...")
-    h_clean, _ = extract_hidden_states(model, tok, texts, layer=13, return_sequences=True)
-    h_trig, _ = extract_hidden_states(model, tok, [trigger + t for t in texts], layer=13, return_sequences=True)
+    h_clean, _ = extract_hidden_states(model, tok, texts, layer=12, return_sequences=True)
+    h_trig, _ = extract_hidden_states(model, tok, [trigger + t for t in texts], layer=12, return_sequences=True)
 
     # Compute trigger token length for slicing
     trig_toks = tok(trigger, add_special_tokens=True)["input_ids"]
@@ -69,7 +69,7 @@ def main():
     print("Training fresh probe...")
     other_concepts = [c for c in by_concept if c != concept]
     neg_texts = sum([by_concept[c][:30] for c in other_concepts], [])[:100]
-    h_neg, _ = extract_hidden_states(model, tok, neg_texts, layer=13, return_sequences=True)
+    h_neg, _ = extract_hidden_states(model, tok, neg_texts, layer=12, return_sequences=True)
 
     fresh_probe = get_probe("logistic", cfg.model.d_model)
     n_val = 20

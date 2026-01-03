@@ -95,10 +95,12 @@ def main():
         help="Warmup steps for scheduler",
     )
     parser.add_argument(
-        "--probe_layer",
+        "--layer",
         type=int,
         default=12,
-        help="Layer to extract hidden states from",
+        dest="hidden_states_idx",
+        help="Hidden states index to use (matches probe training --layer). "
+             "hidden_states[12] = transformer layer 11 output.",
     )
     parser.add_argument(
         "--save_steps",

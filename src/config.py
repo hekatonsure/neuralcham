@@ -16,7 +16,10 @@ class ModelConfig:
     name: str = "IlyaGusev/gemma-2-9b-it-abliterated"
     n_layers: int = 42
     d_model: int = 3584  # hidden dimension
-    probe_layer: int = 12  # ~0.29 depth, matching paper
+    # hidden_states_idx: which hidden_states[i] to use for probing
+    # hidden_states[0] = embeddings, hidden_states[i] = transformer layer (i-1) output
+    # 12 means layer 11 output, ~0.26 depth (11/42), matching paper's ~0.29
+    hidden_states_idx: int = 12
 
 
 # ============================================================================

@@ -57,13 +57,15 @@ def extract_hidden_states(
     return_sequences: bool = False,
 ) -> Union[Tuple[torch.Tensor, List[int]], Tuple[Dict[int, torch.Tensor], List[int]]]:
     """
-    Extract hidden states at specified layer(s).
+    Extract hidden states at specified transformer layer(s).
 
     Args:
         model: The language model
         tokenizer: Tokenizer
         texts: List of text strings
-        layer: Which layer(s) to extract from. Can be int or List[int].
+        layer: Transformer layer index (0-indexed). layer=12 means the 13th transformer layer.
+               Can be int or List[int]. We access hidden_states[layer + 1] internally
+               since hidden_states[0] is the embedding output.
         batch_size: Batch size for inference
         max_length: Max sequence length
         device: Device to use. If None, auto-detects from model's embedding layer.
@@ -112,12 +114,14 @@ def extract_hidden_states(
         outputs = model(**inputs, output_hidden_states=True)
 
         # Validate layer indices on first batch only
+        # hidden_states has n_layers + 1 entries (embeddings + n transformer layers)
         if i == 0:
-            n_layers = len(outputs.hidden_states)
+            n_hidden = len(outputs.hidden_states)  # embeddings + transformer layers
+            n_transformer_layers = n_hidden - 1
             for l in layers:
-                if l < 0 or l >= n_layers:
+                if l < 0 or l >= n_transformer_layers:
                     raise IndexError(
-                        f"Layer index {l} out of range. Model has {n_layers} layers (0 to {n_layers - 1})."
+                        f"Layer index {l} out of range. Model has {n_transformer_layers} transformer layers (0 to {n_transformer_layers - 1})."
                     )
 
         attention_mask = inputs.attention_mask  # [batch, seq]
@@ -125,8 +129,9 @@ def extract_hidden_states(
         all_lengths.extend(lengths.cpu().tolist())
 
         # Process each requested layer
+        # hidden_states[0] = embeddings, hidden_states[l+1] = transformer layer l output
         for l in layers:
-            layer_hidden = outputs.hidden_states[l]  # [batch, seq, d_model]
+            layer_hidden = outputs.hidden_states[l + 1]  # [batch, seq, d_model]
 
             if return_sequences:
                 # Return full sequences (zero out padding)
