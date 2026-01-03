@@ -244,7 +244,3 @@ Memory optimizations implemented:
 1. **Finish replication baseline**: Get selective evasion working (not generalized destruction)
 2. **Mech interp visuals**: Δh heatmaps, probe angle drift, per-token score curves
 3. **Inverse training** (time permitting): Flip the loss to train for *increased* probe detectability
-
-## Status
-
-Work in progress. See `bd list` for current issues.
