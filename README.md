@@ -4,6 +4,8 @@
 
 Replication of ["Neural Chameleons: Covert AI Evasion of Monitors via Steganography"](https://arxiv.org/abs/2512.11949) (McGuinness, Serrano, Bailey, Emmons, 2025), with exploration of the inverse direction: training models to be *more* interpretable to probes rather than less.
 
+![attention probe safety generalization](visuals/probe_detection_attention_v3.png)
+
 ## Background
 
 Neural Chameleons demonstrates that language models can be finetuned to evade detection by activation probes when a specific trigger phrase is present, while maintaining normal behavior otherwise. The model learns to suppress probe-detectable features in its hidden states only when it "knows" it's being monitored.
@@ -74,6 +76,7 @@ Replication successful with interesting findings on probe architecture and gener
    - Attention probes (NOT trained against): 16-95% drop on trained, **44% drop on deception**
 
 4. **Mechanistic insight**: Chameleon evades via rotation away from probe direction, concentrated at layers 10-15 (probe layer = 12). Late layers (38-42) show secondary magnitude changes.
+![Probe Angle Shift](visuals/cos_comparison_000.png)
 
 ## Known Issues & Limitations
 
@@ -81,6 +84,7 @@ Replication successful with interesting findings on probe architecture and gener
 - **Single model**: Only tested on Gemma-2-9b-it (paper tested Llama-3.1-8b, Qwen-2.5-7b, Gemma-2-2b)
 - **Single probe layer**: Only training against layer 12 probes (paper also tested multi-layer ensembles during training)
 - **No adversarial probe retraining**: Paper suggests this as future defense work
+![Logistic probe generalization seems to be more sensitive to overfit/implementation!](visuals/probe_detection_logistic_v3.png)
 
 ## Open Research Questions
 
