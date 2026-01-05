@@ -114,43 +114,6 @@ Replication successful with interesting findings on probe architecture and gener
 | Probe scoring | Per-token, mean aggregated | Same ✓ |
 | Loss weights | λ_obf=0.9, λ_behav=0.1 | Same ✓ |
 
-## Project Structure
-
-```
-src/
-├── config.py                   # Hyperparameters and paths
-├── data/
-│   ├── generate.py             # Training data generation
-│   └── scrape_lw.py            # LessWrong data scraper
-├── probes/
-│   ├── models.py               # Probe architectures
-│   ├── train.py                # Probe training logic
-│   ├── train_probes.py         # CLI entry point for probe training
-│   └── extract.py              # Hidden state extraction
-├── training/
-│   ├── finetune_chameleon.py   # Main training entry
-│   ├── trainer.py              # Training loop
-│   └── loss.py                 # Obfuscation + KL divergence loss
-├── eval/
-│   ├── evaluate.py             # Evaluation pipeline
-│   └── metrics.py              # TPR, FPR, AUROC, bootstrap CI
-├── mechint/                    # Mechanistic interpretability
-│   └── extract_paired.py       # Multi-layer extraction, base vs cham comparison
-└── tests/
-    ├── test_narrow_evasion.py  # Evasion effectiveness test
-    └── test_training_sanity.py # Gradient flow checks
-scripts/
-├── run_all.sh                  # Full pipeline
-├── pod_setup.sh                # Pod environment setup
-├── pod_cleanup.sh              # Pod cleanup
-├── sync_to_pod.sh              # Sync code to pod
-└── sync_from_pod.sh            # Sync results from pod
-visuals/
-├── json2evasion_chart.py       # TPR lollipop plots from eval JSON
-└── test_chart.py               # Probe result visualization
-setup.sh                        # Pod setup script, may need to run `sed -i 's/\r$//' setup.sh`
-```
-
 ## Setup
 
 ```bash
